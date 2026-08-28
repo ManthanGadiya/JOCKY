@@ -49,18 +49,18 @@ Build a safe, reproducible, defensive forensic investigation platform around the
 | Forensic adapters       | 🟠 Scaffolded   | Synthetic only; platform abstraction not yet |
 | Evidence model          | 🟢 Verified     | Canonical envelope schema_version 1 + integrity SHA256 + provenance (tested, E2E) |
 | Agent                   | 🟡 Partial      | C++ stub still; harness is POST /api/run (synthetic) — transport via nginx 8082 live |
-| Backend                 | 🟢 Verified     | + POST /api/compile + POST /api/run + /api/evidence?case_id + /api/findings (25 tests, live on :8000) |
-| Detection engine        | 🟡 Partial      | calc_risk + YARA string hits still; per-evidence finding created on run (risk 5 INFO) |
-| Investigation graph     | 🟢 Verified     | GET /api/cases/{id}/graph live nodes/edges + ReactFlow live wiring (demo fallback ok) |
-| Timeline                | 🟢 Verified     | GET /api/cases/{id}/timeline live ordered by observed_at (tested) |
-| Dashboard               | 🟢 Verified     | JOCKY editor (textarea + Compile/Run) + live Graph/Timeline/RiskGauge + evidence list + 5s poll — live on :3000 |
-| Report generation       | 🔴 Not Started  | weasyprint in requirements but no /api/report |
-| Docker environment      | 🟢 Verified     | 9 services up: backend :8000, frontend :3000, nginx 8082→80, db/redis/minio/jocky/detector live (2026-08-28) |
+| Backend                 | 🟢 Verified     | + POST /api/compile + POST /api/run + GET /api/cases/{id}/report (PDF via WeasyPrint pydyf 0.11) + /evidence?case_id + /findings (35 tests, live :8000) |
+| Detection engine        | 🟡 Partial      | calc_risk + YARA string hits still; per-evidence finding (INFO/HIGH) with MITRE + risk |
+| Investigation graph     | 🟢 Verified     | GET /api/cases/{id}/graph star host→evidence + process→file/net correlation edges, live ReactFlow |
+| Timeline                | 🟢 Verified     | GET /api/cases/{id}/timeline ordered by observed_at + payload detail |
+| Dashboard               | 🟢 Verified     | Editor (Compile/Run) + live Graph/Timeline/Risk + findings + 📄 Report PDF download (live :3000) |
+| Report generation       | 🟢 Verified     | GET /api/cases/{id}/report + POST /api/report → WeasyPrint PDF (HTML fallback on host) — 4 report tests, live PDF 20KB verified |
+| Docker environment      | 🟢 Verified     | 9 services Up: backend (pango/cairo deps) :8000, frontend :3000, nginx 8082, db healthy, redis/minio/jocky/detector — PDF live verified |
 | Windows support         | 🔴 Not Verified | No WinAPI; synthetic HOST-001/WIN-001 IDs only |
-| Linux support           | 🟡 Partial      | Synthetic provider reads no /proc yet; Docker Linux path verified |
-| Controlled laboratory   | 🟡 Partial      | 6 fixtures synthetic + live system.info scenario in tests/test_e2e.py |
-| End-to-end workflow     | 🟢 Verified     | `system.info();` → Compile → IR v1 → Run → envelope → Timeline/Graph/Risk live (E2E test + live curl) |
-| Automated tests         | 🟢 Verified     | 25 tests (test_compiler 9, test_backend 13, test_e2e 3) all passing |
+| Linux support           | 🟡 Partial      | Synthetic provider; Docker Linux path verified |
+| Controlled laboratory   | 🟡 Partial      | 6 fixtures + live full-sweep case 60 (4 evidence) + report cases |
+| End-to-end workflow     | 🟢 Verified     | `system.info→process→file→net` → Compile→Run→envelope→Timeline/Graph/Risk→**Report PDF** live E2E |
+| Automated tests         | 🟢 Verified     | 35 tests (compiler 9, backend 13, e2e 3, forensic 6, report 4) all passing |
 
 ---
 
@@ -159,9 +159,9 @@ Every stage must eventually be independently testable.
 
 ---
 
-# 7. Currently Verified (2026-08-28 — Forensic Ops Expansion)
+# 7. Currently Verified (2026-08-28 — Report Generation)
 
-### Verified on Host + Docker (evidence logged, 31 tests)
+### Verified on Host + Docker (evidence logged, 35 tests)
 
 * **Host compiler** `tools/jockyc.py` → IR_VERSION=1, IR_CAPS/IR_OPS, EntryPoint, JOCKY_DEMO_MARKER, bb.poly.* — 3 hashes differ + `edr.disable()` → exit 2 fail-closed (9 compiler tests)
 * **Backend API** `backend/app/main.py` v1.1.1 (enriched) via TestClient **and live on :8000**:
@@ -174,16 +174,17 @@ Every stage must eventually be independently testable.
   * Live verified on :8000 case 60 (full sweep 4 evidence, risk 60, graph 6 nodes, timeline 4)
 * **E2E** `system.info();` + `process.list` + `file.hash` + `network.connections` via `POST /api/run` → live curl + `tests/test_e2e.py` + `tests/test_forensic_ops.py` (6)
 * **Docker** 9 services Up verified: backend 8000, frontend 3000 (full sweep editor), nginx 8082, db healthy, redis/minio/jocky/detector
-* **Dashboard** :3000 — JOCKY editor now default `system.info()+process.list+file.hash+network.connections`, buttons for each op + full sweep + traversal fail demo, IR pane IR_VERSION=1, live evidence detail (process counts, file hashes, C2 flags), star graph with correlation edges
-* **Tests** 31/31 passing: `test_compiler` 9 + `test_backend` 13 + `test_e2e` 3 + `test_forensic_ops` 6
+* **Dashboard** :3000 — editor now default 4-op sweep + traversal fail demo, **📄 Report PDF** button per case → live PDF download
+* **Report** `GET /api/cases/{id}/report` + `POST /api/report` → WeasyPrint 62.3 (pydyf 0.11, pango/cairo) HTML→PDF 20KB with case summary, findings, canonical envelopes, integrity, timeline, graph, provenance (verified `X-Report-Fallback` absent on :8000 Docker, HTML fallback on host)
+* **Tests** 35/35 passing: `test_compiler` 9 + `test_backend` 13 + `test_e2e` 3 + `test_forensic_ops` 6 + `test_report` 4
 
 ### Still Pending / Not Verified
 
 * Real forensic adapter behavior (WinAPI/ETW, /proc) — synthetic provider only
-* Report generation (`/api/report` + WeasyPrint PDF)
 * Windows native validation (synthetic IDs only)
-* YARA binary scanning (still string-contains in Python)
+* YARA binary scanning (still string-contains in Python; systematic .ll file scan via yara binary pending)
 * Persisted store: Postgres/Redis/MinIO declared but evidence still in-memory (lost on restart)
+* Agent binary still stub (POST /api/run is harness; real agent POST via nginx 8082 not yet)
 
 ---
 
@@ -232,6 +233,23 @@ have succeeded.
 ---
 
 # 9. Current Milestone
+
+## Milestone: ✅ Report Generation — PDF via WeasyPrint — COMPLETE (2026-08-28)
+
+### Demo
+
+```jocky
+system.info();
+process.list();
+file.hash("/evidence/sample.exe");
+network.connections();
+```
+
+→ **Report PDF** `GET /api/cases/{id}/report` (20KB, risk badge, chain-of-custody, timeline, findings) — WeasyPrint 62.3 + pydyf 0.11.0 live on :8000 Docker with pango/cairo deps. Frontend **📄 Report PDF** button triggers download. Tests 4 report cases including empty case.
+
+→ Prior milestone still holds: 4 envelopes correlated graph, file YARA + process Sigma, risk 60 MEDIUM, path traversal 400, memory 403.
+
+---
 
 ## Milestone: ✅ Forensic Ops Expansion — process/file/network enriched — COMPLETE (2026-08-28)
 
@@ -293,6 +311,18 @@ Progressively add operations per LANGUAGE_SPEC.md §10, each with capability, sy
 ---
 
 # 11. Recent Changes
+
+### 2026-08-28 — Report Generation
+
+#### Added
+- `backend/Dockerfile` — pango/cairo/gdk system deps + `pydyf==0.11.0` pin (fix weasyprint 62.3/pydyf 0.12 super().transform bug) → live PDF
+- `backend/app/main.py` — `ReportRequest` + `build_report_html(case_id)` (case summary, findings, canonical envelopes with provenance/chain, timeline, graph, MITRE) + `render_pdf_bytes()` via `weasyprint.HTML` → `GET /api/cases/{id}/report` + `POST /api/report` StreamingResponse `application/pdf` (HTML fallback with `X-Report-Fallback` on host without deps)
+- `frontend/src/App.tsx` — **📄 Report PDF** button per findings panel, `downloadReport()` fetches `GET /report` blob → `JOCKY_case_{id}_report.pdf` (or .html fallback)
+- `tests/test_report.py` (4) — report generation for populated case (pdf or html fallback), empty case, POST variant, chain/integrity content check
+
+#### Verified
+- 35/35 tests passing (host)
+- Live Docker :8000 — `POST /api/run` 4-op sweep case 80 → `GET /api/cases/80/report` → `application/pdf` 20KB `%PDF` verified, saved `build/report_case_80.pdf`
 
 ### 2026-08-28 — Forensic Ops Expansion
 

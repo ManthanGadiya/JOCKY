@@ -77,6 +77,25 @@ export default function App(){
     finally{ setLoading(false) }
   }
 
+  const downloadReport = async ()=>{
+    setLoading(true); setError("")
+    try{
+      const res = await fetch(`${API}/api/cases/${caseId}/report`)
+      if(!res.ok) throw new Error('report failed '+res.status)
+      const blob = await res.blob()
+      const url = URL.createObjectURL(blob)
+      const a = document.createElement('a')
+      a.href = url
+      a.download = `JOCKY_case_${caseId}_report.pdf`
+      // if fallback html, still save as .html for debugging
+      const ctype = res.headers.get('content-type')||''
+      if(ctype.includes('html')) a.download = `JOCKY_case_${caseId}_report.html`
+      document.body.appendChild(a); a.click(); a.remove(); URL.revokeObjectURL(url)
+      setLastRun(`Report downloaded — case ${caseId} (${ctype.includes('pdf')?'PDF':'HTML fallback'})`)
+    }catch(e:any){ setError(e.message||String(e)) }
+    finally{ setLoading(false) }
+  }
+
   return (
     <div className="min-h-screen p-6 bg-zinc-950 text-zinc-100">
       <header className="flex justify-between items-center border-b border-zinc-800 pb-4 mb-6">
@@ -137,8 +156,8 @@ export default function App(){
         <div className="col-span-4 space-y-4">
           <RiskGauge risk={risk} />
           <div className="bg-zinc-900 rounded-xl p-4 border border-zinc-800">
-            <h3 className="font-semibold">Findings — Live</h3>
-            {findings.length===0 ? <p className="text-sm text-zinc-500 mt-2">No findings yet — Run a sweep</p> :
+            <div className="flex justify-between items-center"><h3 className="font-semibold">Findings — Live</h3><button onClick={downloadReport} disabled={loading} className="text-xs bg-violet-600 hover:bg-violet-500 px-3 py-1 rounded disabled:opacity-50">📄 Report PDF</button></div>
+            {findings.length===0 ? <p className="text-sm text-zinc-500 mt-2">No findings yet — Run a sweep then download report.</p> :
               <ul className="text-sm mt-2 space-y-1">{findings.slice(-8).map((f:any)=><li key={f.id} className="text-xs flex justify-between"><span><span className="text-violet-400">{f.id}</span> {f.rule}</span><span className={f.severity==='CRITICAL'?'text-red-400':f.severity==='HIGH'?'text-orange-400':'text-green-400'}>{f.severity} {f.risk}</span></li>)}</ul>}
           </div>
           <div className="bg-zinc-900 rounded-xl p-4 border border-zinc-800">
