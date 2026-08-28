@@ -6,6 +6,21 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/) and [Sem
 
 ## [Unreleased]
 
+## 2026-08-28 — Report Generation — PDF via WeasyPrint
+
+### Added
+- `backend/Dockerfile` — `libpango-1.0-0 libpangocairo-1.0-0 libgdk-pixbuf-2.0-0 libcairo2` + `pydyf==0.11.0` pin (fixes weasyprint 62.3 `super().transform` bug)
+- `backend/app/main.py` — `ReportRequest` + `build_report_html()` + `render_pdf_bytes()` (WeasyPrint) → `GET /api/cases/{id}/report` + `POST /api/report` → `application/pdf` 20KB per case (case summary, findings, evidence table with provenance/chain, timeline, graph). Fallback HTML with `X-Report-Fallback` on host without pango deps.
+- `frontend/src/App.tsx` — **📄 Report PDF** button (findings panel) → `fetch GET /report` blob → `JOCKY_case_{id}_report.pdf` download (handles pdf vs html fallback)
+- `tests/test_report.py` (4) — populated report, empty case, POST variant, chain/integrity content
+
+### Changed
+- `docs/STATUS.md` + `STATUS.md` — Report 🟢 Verified, 35 tests, Docker pango deps
+
+### Verified
+- Host `pytest` 35/35 (host fallback HTML)
+- Docker :8000 `POST /api/run` 4-op sweep case 80 → `GET /api/cases/80/report` → `application/pdf` `%PDF` 20KB verified live (saved `build/report_case_80.pdf`)
+
 ## 2026-08-28 — Forensic Ops Expansion — process/file/network enriched + graph correlation
 
 ### Added

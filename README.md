@@ -806,34 +806,31 @@ Instructions for AI coding agents contributing to the repository.
 
 > This section is intentionally kept short. `docs/STATUS.md` contains the detailed implementation audit with evidence.
 
-**Phase:** E2E `system.info();` ✅ Complete — Dashboard Run Live (2026-08-28)
+**Phase:** Report Generation ✅ Complete — Full Forensic Sweep + PDF Live (2026-08-28)
 
-**Verdict:** **First query from the dashboard works end-to-end.** `system.info();` → Compile (IR v1) → Validation fail-closed → Synthetic envelope → Backend → Findings → Live Graph/Timeline/Risk. Docker verified live on :8000/:3000/8082. 25 tests passing.
+**Verdict:** **Full investigation sweep + correlated graph + PDF report works end-to-end.** `system.info(); process.list(); file.hash(); network.connections();` → 4 envelopes, star graph `host→each + process→file/net` edges, risk 60 MEDIUM, **Report PDF** `GET /api/cases/{id}/report` → 20KB `%PDF`. Docker verified `:8000`/`:3000`/`8082` — 35 tests.
 
-### Verified (evidence in `docs/STATUS.md §7`, `pytest` 25/25, live `curl`)
+### Verified (evidence in `docs/STATUS.md §7`, `pytest` 35/35, live `curl` + PDF)
 
-* 🟢 `tools/jockyc.py` + `jocky/src/IRGen.cpp` → **IR_VERSION=1**, `IR_CAPS`/`IR_OPS`, `EntryPoint`, `JOCKY_DEMO_MARKER`, `bb.poly.*` — 3 hashes differ; `edr.disable();` → **exit 2 / HTTP 422 fail-closed**
-* 🟢 `POST /api/compile {system.info();}` → `ir_version 1`, `caps [system.read]`, `ops [system.info]`; unknown op → 422
-* 🟢 `POST /api/run {system.info();}` → **canonical envelope** `EV-... schema_version 1 integrity.sha256 provenance.ir_hash chain_of_custody` risk 5 LOW finding `F-...`; `memory.analyze` → **403 denied** per `DEFAULT_POLICY`
-* 🟢 `GET /api/cases/{id}/timeline|graph|risk` + `/api/evidence?case_id=` + `/api/findings?case_id=` — **live** (not static mocks); graph = host→evidence→finding
-* 🟢 `frontend` :3000 — **JOCKY editor** (textarea + **Compile**/**Run** + `edr.disable` fail demo), **IR pane** (shows `IR_VERSION=1`), **live** Graph/Timeline/RiskGauge/evidence list, 5s poll — verified `curl :3000` + manual Run flow
-* 🟢 `docker compose ps` — **9 services Up**: `backend` :8000, `frontend` :3000, `nginx` 8082→80, `db` healthy, `redis`, `minio`, `jocky`, `detector`
+* 🟢 `tools/jockyc.py` + `jocky/src/IRGen.cpp` → **IR_VERSION=1**, 3 hashes differ; `edr.disable` → **422**, `memory.analyze` → **403**
+* 🟢 `POST /api/run` enriched: `process.list` 4-proc tree Sigma T1055 risk 60, `file.hash("/evidence/sample.exe")` path-aware YARA T1105 risk 55 (traversal `../../etc/passwd` → **400**), `network.connections` C2 T1071 risk 30; combined sweep 4 evidence risk 60, **star graph** + correlation edges verified on :8000 case 80
+* 🟢 `GET /api/cases/{id}/report` → **`application/pdf` 20KB** (WeasyPrint 62.3 + `pydyf 0.11` pango/cairo in Docker, HTML fallback on host) — verified `build/report_case_80.pdf` `%PDF` — **POST /api/report** also
+* 🟢 `frontend` :3000 — editor **full sweep** default + **📄 Report PDF** button per findings → `fetch GET /report` → download `JOCKY_case_{id}_report.pdf` (handles pdf vs html fallback), live Graph/Timeline/Risk +
+* 🟢 `docker compose ps` — **9 Up** `backend` (pango deps) `:8000`, `frontend` `:3000`, `nginx` 8082, `db` healthy, `redis/minio/jocky/detector`
 
 ### Partially Implemented
 
-* 🟡 Runtime is still synthetic provider (no WinAPI/ETW, no `/proc`); `process.list`/`file.hash`/`network.connections` compile and run but use stub payloads
-* 🟡 Backend still in-memory (Postgres/Redis/MinIO declared but not persisted — evidence lost on restart); `sqlalchemy` models exist but not wired
-* 🟡 Detection still `calc_risk` + YARA **string-contains** (YARA binary not invoked for `.ll`); findings created per-evidence but not yet Sigma-correlated
-* 🟡 Lexer/Parser/AST remain stubs — validation is regex `RE_CALL` in compiler/backend (covers whitelist correctly but not full `LANGUAGE_SPEC.md` grammar)
-* 🟡 `testdata/*.json` fixtures (6 synthetic) exist but `evidence.load()` wiring pending; next milestone will add richer `process.list` correlation
+* 🟡 Runtime synthetic only (no WinAPI/ETW `/proc`); Lexer/Parser/AST still stubs (regex whitelist covers spec correctly for now)
+* 🟡 Backend still in-memory (Postgres/Redis/MinIO not persisted — evidence lost on restart)
+* 🟡 Detection still string YARA (YARA binary `.ll` scan pending systematic)
+* 🟡 `testdata/*.json` 6 fixtures + synthetic sweeps (real `evidence.load()` wiring pending)
 
 ### Still Not Started
 
-* 🔴 Report generation (`/api/report` → WeasyPrint PDF) — `weasyprint` in `requirements.txt` but no endpoint
-* 🔴 Windows/Linux native providers + BYOVD true YARA binary scanning for `.ll` demo
+* 🔴 Windows/Linux native providers + BYOVD YARA binary
 * 🔴 Persistence hardening + auth (JWT) + agent mTLS
 
-**Next Milestone:** Expand language per `LANGUAGE_SPEC.md §10` — `process.list()`, `file.hash()`, `network.connections()` with richer envelope normalization + correlated graph edges + Sigma enrichment — see `docs/STATUS.md §10`.
+**Next Milestone:** Persist to Postgres (`sqlalchemy` wire) + YARA binary for `.ll` + richer correlation (filter/sort per `LANGUAGE_SPEC`) — see `docs/STATUS.md §10`.
 
 The status above must be updated when the actual implementation changes.
 
