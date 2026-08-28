@@ -1,0 +1,5 @@
+JOCKY_DEMO_MARKER
+NOTE: Synthetic safe file for JOCKY lab — no malware, not executable.
+File: evil.dll — PE-like dummy with YARA hit, file_type PE32 executable branch.
+Content: evil dll dummy — safe lab payload C.
+END

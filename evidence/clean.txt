@@ -1,0 +1,5 @@
+NOTE: Synthetic safe file for JOCKY lab — no malware.
+File: clean.txt — used by file.hash("/evidence/clean.txt") to demo no YARA hit, risk low.
+Content: clean file 01 — safe text only.
+This file deliberately does NOT contain the demo marker.
+END

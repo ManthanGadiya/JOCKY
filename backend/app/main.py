@@ -3,7 +3,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 from typing import Optional, List, Dict, Any
-import hashlib, time, json, re, random, uuid, datetime, io, os
+import hashlib, time, json, re, random, uuid, datetime, io, os, pathlib
 
 app = FastAPI(title="JOCKY Backend - Central Forensics (L5+L6+ E2E)", version="1.2.0")
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
@@ -314,18 +314,57 @@ def make_envelope(op: str, agent_id: str, host_id: str, case_id: int, ir_hash: s
     elif op.startswith("file."):
         raw_path = extract_file_arg(source, op) or "/evidence/sample.exe"
         validate_path(raw_path)
-        sha = hashlib.sha256(raw_path.encode()).hexdigest()
-        low = raw_path.lower()
-        is_suspicious = any(k in low for k in ("suspicious","sample.exe","malware","evil","payload","implant"))
-        payload.update({
-            "type": "file", "path": raw_path, "name": raw_path.split("/")[-1].split("\\")[-1],
-            "size": 1048576 if is_suspicious else 2048, "file_type": "PE32 executable" if raw_path.endswith(".exe") else "text",
-            "creation_time": "2026-08-28T10:31:12Z", "modification_time": "2026-08-28T10:31:12Z",
-            "hashes": {"sha256": sha, "sha512": hashlib.sha512(raw_path.encode()).hexdigest()[:64]},
-            "sha256": sha, "yara_hit": "JOCKY_DEMO_MARKER" if is_suspicious else None,
-            "sigma_hit": None, "mitre": "T1105" if is_suspicious else None,
-            "note": "synthetic file op — no real filesystem read (safe)"
-        })
+        # Try to read real safe file from evidence roots — each path gives different sha/size (Bug 3)
+        real_data = None
+        real_path_found = None
+        candidates = [
+            f"/app{raw_path}" if raw_path.startswith("/") else f"/app/{raw_path}",
+            raw_path,
+            f"./{raw_path.lstrip('/')}",
+            f"evidence/{raw_path.split('/')[-1]}",
+            f"/app/evidence/{raw_path.split('/')[-1]}",
+            f"./evidence/{raw_path.split('/')[-1]}",
+            f"testdata/{raw_path.split('/')[-1]}",
+            f"/app/testdata/{raw_path.split('/')[-1]}",
+        ]
+        for cand in candidates:
+            try:
+                p = pathlib.Path(cand)
+                if p.exists() and p.is_file():
+                    data = p.read_bytes()
+                    if len(data) > 5*1024*1024:
+                        data = data[:5*1024*1024]
+                    real_data = data
+                    real_path_found = str(p)
+                    break
+            except Exception:
+                continue
+        if real_data is not None:
+            sha = hashlib.sha256(real_data).hexdigest()
+            sha512 = hashlib.sha512(real_data).hexdigest()[:64]
+            is_yara = b"JOCKY_DEMO_MARKER" in real_data
+            payload.update({
+                "type": "file", "path": raw_path, "real_path": real_path_found, "name": raw_path.split("/")[-1].split("\\")[-1],
+                "size": len(real_data), "file_type": "PE32 executable" if raw_path.lower().endswith((".exe",".dll",".bin")) else "text",
+                "creation_time": "2026-08-28T10:31:12Z", "modification_time": "2026-08-28T10:31:12Z",
+                "hashes": {"sha256": sha, "sha512": sha512},
+                "sha256": sha, "yara_hit": "JOCKY_DEMO_MARKER" if is_yara else None,
+                "sigma_hit": None, "mitre": "T1105" if is_yara else None,
+                "note": f"real file read from {real_path_found} — safe lab, size {len(real_data)}",
+            })
+        else:
+            sha = hashlib.sha256(raw_path.encode()).hexdigest()
+            low = raw_path.lower()
+            is_suspicious = any(k in low for k in ("suspicious","sample.exe","malware","evil","payload","implant"))
+            payload.update({
+                "type": "file", "path": raw_path, "name": raw_path.split("/")[-1].split("\\")[-1],
+                "size": 1048576 if is_suspicious else 2048, "file_type": "PE32 executable" if raw_path.endswith(".exe") else "text",
+                "creation_time": "2026-08-28T10:31:12Z", "modification_time": "2026-08-28T10:31:12Z",
+                "hashes": {"sha256": sha, "sha512": hashlib.sha512(raw_path.encode()).hexdigest()[:64]},
+                "sha256": sha, "yara_hit": "JOCKY_DEMO_MARKER" if is_suspicious else None,
+                "sigma_hit": None, "mitre": "T1105" if is_suspicious else None,
+                "note": "synthetic file op — no real filesystem read (safe, file not found)",
+            })
         ev_type = "file"
     elif op.startswith("network."):
         conns = [

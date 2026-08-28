@@ -1,0 +1,6 @@
+JOCKY_DEMO_MARKER
+NOTE: Synthetic safe file for JOCKY lab — no malware, not executable.
+File: sample.exe — used by file.hash("/evidence/sample.exe") to demo YARA hit (T1105) + hash distinct.
+Content: safe dummy sample 01 — JOCKY lab only.
+Padding to make size ~1KB: Lorem ipsum dolor sit amet.
+END
