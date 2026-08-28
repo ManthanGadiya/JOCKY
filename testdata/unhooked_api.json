@@ -1,0 +1,7 @@
+{
+  "agent_id": "WIN-001",
+  "type": "memory",
+  "api_unhooking": { "ntdll": true, "hooked_functions": ["NtAllocateVirtualMemory", "NtWriteVirtualMemory"], "direct_syscall": true },
+  "mitre": "T1027.013",
+  "risk_contrib": 25
+}

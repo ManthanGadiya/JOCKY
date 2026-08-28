@@ -1,0 +1,8 @@
+[
+  { "timestamp": "2026-07-24T10:30:00Z", "agent_id": "WIN-001", "source": "log", "event": "User analyst login", "risk": 0 },
+  { "timestamp": "2026-07-24T10:31:12Z", "agent_id": "WIN-001", "source": "file", "event": "File drop C:\\Temp\\suspicious.exe", "sha256": "a1...", "risk": 20 },
+  { "timestamp": "2026-07-24T10:32:03Z", "agent_id": "WIN-001", "source": "memory", "event": "Process hollowing explorer.exe (1234)", "risk": 65 },
+  { "timestamp": "2026-07-24T10:32:45Z", "agent_id": "WIN-001", "source": "network", "event": "C2 ESTABLISHED 185.220.101.5:443", "risk": 80 },
+  { "timestamp": "2026-07-24T10:33:10Z", "agent_id": "WIN-001", "source": "driver", "event": "Vulnerable driver RTCore64.sys", "risk": 85 },
+  { "timestamp": "2026-07-24T10:33:30Z", "agent_id": "UBUNTU-001", "source": "process", "event": "Suspicious child of systemd (ppid anomaly)", "risk": 45 }
+]

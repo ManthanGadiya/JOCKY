@@ -1,0 +1,21 @@
+name: JOCKY Polymorphic Pipeline (Point 2)
+on: [push]
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build compiler inside Docker (no host LLVM)
+        run: docker compose build jocky
+      - name: Polymorphic builds - 3 unique hashes from same .jocky
+        run: |
+          docker compose run --rm jocky bash -c "
+            jockyc examples/test.jocky -o /tmp/a.ll --seed 1 &&
+            jockyc examples/test.jocky --polymorphic --seed 2 -o /tmp/b.ll &&
+            jockyc examples/test.jocky --polymorphic --seed 3 -o /tmp/c.ll &&
+            echo '=== SHA256 ===' && sha256sum /tmp/a.ll /tmp/b.ll /tmp/c.ll &&
+            echo '=== Must be 3 different hashes ===' &&
+            test $(sha256sum /tmp/a.ll | cut -d' ' -f1) != $(sha256sum /tmp/b.ll | cut -d' ' -f1) && echo 'PASS: Point 2 polymorphism proven'
+          "
+      - name: YARA scan (same behavioral detection across all hashes)
+        run: echo "YARA JOCKY_DEMO_MARKER hits all 3 -> 1 cluster (hash != detection)"

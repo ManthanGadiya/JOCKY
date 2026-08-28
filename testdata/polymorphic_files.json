@@ -1,0 +1,10 @@
+{
+  "demo": "Behavioral Resilience Lab - 10 hashes, 1 detection cluster",
+  "builds": [
+    { "id": 1, "sha256": "a1b2c3d4e5f6...", "entry": "0x140001000", "imports": ["kernel32.dll","ntdll.dll"] },
+    { "id": 2, "sha256": "b7e8f9a0c1d2...", "entry": "0x140002000", "imports": ["ntdll.dll","kernel32.dll"] },
+    { "id": 3, "sha256": "c9d0e1f2a3b4...", "entry": "0x140001500", "imports": ["advapi32.dll","kernel32.dll"] }
+  ],
+  "yara_cluster": "JOCKY_DEMO_MARKER hits all 3 -> 1 Finding (hash != detection)",
+  "behavior": "All 3 map to same Evidence Graph node via behavioral correlation"
+}

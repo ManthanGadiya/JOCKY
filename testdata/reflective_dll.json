@@ -1,0 +1,8 @@
+{
+  "agent_id": "UBUNTU-001",
+  "type": "memory",
+  "process": { "pid": 2345, "name": "bash", "ppid_anomaly": false },
+  "memory": { "reflective_dll": true, "unbacked_rx": true, "module_unlinked": true },
+  "mitre": "T1620",
+  "risk_contrib": 35
+}

@@ -1,0 +1,21 @@
+// test.jocky - Full forensic DSL demo (all stdlib calls)
+import "forensic.net";
+
+let info = system.info();
+let procs = process.list();
+let tree = process.tree();
+let mods = process.modules(1234);
+let files = file.list("/tmp");
+let meta = file.metadata("/tmp/a.exe");
+let h = file.hash("/tmp/a.exe");
+let verdict = file.analyze("/tmp/a.exe");
+let ifs = network.interfaces();
+let conns = network.connections();
+let mem = memory.analyze(1234);
+let drivers = driver.list();
+let scan = driver.scan("RTCore64.sys");
+let risk = driver.risk("RTCore64.sys");
+
+if (risk > 70) {
+  file.analyze("/tmp/suspicious.exe");
+}

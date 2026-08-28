@@ -1,0 +1,10 @@
+{
+  "agent_id": "WIN-001",
+  "timestamp": "2026-07-24T10:33:10Z",
+  "type": "driver",
+  "driver": { "name": "RTCore64.sys", "version": "1.0.0", "cert": "Micro-Star International", "vulnerable": true, "loldrivers_hit": true, "ioctl_allowlist_bypass": true, "cve": "CVE-2019-16098" },
+  "yara_hit": "BYOVD_RTCore64",
+  "mitre": "T1068",
+  "risk_contrib": 30,
+  "note": "Synthetic - no .sys loaded, no BSOD. Detection via loldrivers list + cert check."
+}

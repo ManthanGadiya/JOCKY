@@ -1,0 +1,23 @@
+# Sigma rules - L7 (process tree anomaly, driver cert anomaly)
+title: Suspicious Process Parent Anomaly
+id: jocky-001
+logsource: { category: process_creation, product: windows }
+detection:
+  selection:
+    ParentImage|endswith: ['\explorer.exe']
+    Image|endswith: ['\svchost.exe']
+    IntegrityLevel: 'Medium'
+  condition: selection
+level: high
+tags: [attack.t1055]
+
+---
+title: Vulnerable Driver Load
+id: jocky-002
+logsource: { category: driver_load }
+detection:
+  selection:
+    ImageLoaded|contains: 'RTCore64.sys'
+  condition: selection
+level: critical
+tags: [attack.t1068]

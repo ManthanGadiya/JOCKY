@@ -1,0 +1,11 @@
+{
+  "agent_id": "WIN-001",
+  "timestamp": "2026-07-24T10:32:03Z",
+  "type": "memory",
+  "process": { "pid": 1234, "ppid": 1, "name": "explorer.exe", "cmdline": "C:\\Windows\\explorer.exe", "ppid_anomaly": true },
+  "memory": { "hollowed": true, "unbacked_rx": true, "mem_type": "MEM_PRIVATE", "protection": "PAGE_EXECUTE_READWRITE", "etw_ti": "stack_spoofed" },
+  "yara_hit": "Process_Hollowing",
+  "mitre": "T1055.012",
+  "risk_contrib": 40,
+  "note": "Synthetic - no real hollowing executed. Demonstrates detection of T1055.012 via MEM_PRIVATE vs MEM_IMAGE mismatch."
+}

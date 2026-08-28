@@ -1,0 +1,12 @@
+// investigate.jocky - cross-platform investigation script
+// Same script runs on Windows (WinAPI) and Linux (/proc) via adapters
+let suspicious = process.list().filter(p => p.risk > 70);
+for (let i = 0; i < suspicious.length; i = i + 1) {
+  let pid = suspicious[i].pid;
+  let m = memory.analyze(pid);
+  let d = driver.scan("RTCore64.sys");
+  if (m.hollowed || d.vulnerable) {
+    file.analyze("/evidence/dump_" + pid + ".bin");
+  }
+}
+let conns = network.connections().filter(c => c.state == "ESTABLISHED");
