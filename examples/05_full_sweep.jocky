@@ -1,0 +1,6 @@
+// 05_full_sweep.jocky — full forensic sweep (system + process + file + network)
+// 4 envelopes, star graph host->each + process->file/net edges, risk 60 MEDIUM, report-ready
+system.info();
+process.list();
+file.hash("/evidence/sample.exe");
+network.connections();

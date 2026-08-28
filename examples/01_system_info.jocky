@@ -1,0 +1,3 @@
+// 01_system_info.jocky — minimal host baseline (E2E milestone)
+// Demonstrates system.info() -> envelope type:system, risk 5 LOW
+system.info();

@@ -325,6 +325,29 @@ Progressively add operations per LANGUAGE_SPEC.md §10, each with capability, sy
 
 # 11. Recent Changes
 
+### 2026-08-28 — Bugfix: Reset, Validation, Examples (Branch Only — Not Merged)
+
+#### Fixed
+- **Bug 1 — Stacking:** `POST /api/run` repeatedly stacked graph/timeline/findings (case 1 → 2→3…). Added `POST /api/reset {case_id?}` + `GET /api/cases/{id}/reset` (clears both in-memory `evidence_store/findings/cases` and Postgres via `db_clear_case/clear_all` + case row delete) + helper `_reset_case/_reset_all`. Frontend now **Reset Case {id}** (amber) + **Reset All** (red) buttons next to editor; after reset `refresh()` clears IR/caps and graph/timeline return demo fallback. Verified live: `POST /api/run` → 1, `POST /api/run` → 2, `POST /api/reset {case_id}` → 0 (Docker :8000 case 300/301).
+
+#### Security — Fail-Closed Validation
+- **Bug 2 — Gibberish accepted:** `system.i.lisidence/saons();` previously `run ok` (produced `nop`) because `RE_CALL` with no valid ops + stripped empty check missing, and `sample.exe (` in comment falsely matched `sample.exe`. Fixed `validate_and_collect()` in `backend/app/main.py`, `tools/jockyc.py`, `jocky/src/IRGen.cpp` to **strip `//` and `/* */` comments before `RE_CALL`**, and fail-closed when `ops empty` but `stripped (comments removed + whitespace/semicolons stripped)` non-empty and no `import` — now returns `422 Syntax error: no valid JOCKY operation found`. Verified: `tools/jockyc.py` `system.i.lisidence/saons();` → exit 2, `POST /api/compile` → 422, empty → still nop.
+
+#### Added
+- **Bug 3 — Same evidence + Examples:** Evidence was deterministic synthetic same each run. Added **7 verified examples** in `examples/` (`01_system_info.jocky` minimal, `02_process_list.jocky`, `03_file_hash.jocky` path-aware YARA, `04_network.jocky`, `05_full_sweep.jocky` all four, `06_byovd_lab.jocky` process+driver, `07_triage.jocky` + existing `test.jocky`+`investigate.jocky` = 9 total) + backend `GET /api/examples` (list .jocky files, preview, size) + `GET /api/examples/{name}` (sanitized basename, no `..`/`/` traversal → 400, `../backend/app/main.py` → 404) with volume mount `examples:/app/examples:ro` (and `docker-compose.yml` now mounts `yara+testdata+examples` to backend). Frontend `fetchExamples()` on mount, **— Load example —** dropdown (9) + `loadExample(name)` fetches content into editor with `Loaded example {name}` toast. Verified live: `GET /api/examples` 9, `GET /api/examples/01_system_info.jocky` → `system.info()`, different examples → different `type` payloads.
+
+#### Changed
+- `backend/app/db.py` — added `db_clear_case(case_id)` + `db_clear_all()` (used by reset)
+- `backend/app/main.py` — added `_reset_case/_reset_all` helpers, `ResetRequest`, `POST /api/reset`, `GET /api/cases/{id}/reset`, `GET /api/examples*` endpoints, validation comment stripping before RE_CALL
+- `frontend/src/App.tsx` — added `examples` state, `fetchExamples`, `loadExample`, `resetCase/resetAll` with buttons, moved YARA fetch to also poll, header still shows cases/evidence counts
+- `docker-compose.yml` — backend volumes now `yara+testdata+examples` (3 mounts)
+- `jocky/src/IRGen.cpp` — same comment stripping + gibberish fail-closed
+- `tests/test_bugfix.py` (10) — gibberish 422 (compile+run), empty still nop, reset case/all, examples list/fetch/traversal block, different examples different types, file hash example
+
+#### Verified
+- Host `pytest` **51/51** (41 + 10 bugfix) all passing, `tools/jockyc.py` `03_file_hash.jocky` now succeeds after comment fix, gibberish → 422
+- Docker :8000 `POST /api/compile {system.i.lisidence/saons();}` → 422, `GET /api/examples` 9, `GET /api/examples/01_system_info.jocky` → `system.info()`, reset flow 1→2→0 verified live case 300/301, frontend dropdown + Reset buttons visible after rebuild (`docker compose build --no-cache frontend`)
+
 ### 2026-08-28 — YARA Binary
 
 #### Added

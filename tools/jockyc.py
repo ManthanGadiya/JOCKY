@@ -30,7 +30,9 @@ OP_CAPS = {
 RE_CALL = re.compile(r'([a-zA-Z_][a-zA-Z0-9_]*)\.([a-zA-Z_][a-zA-Z0-9_]*)\s*\(')
 
 def validate_and_collect(src: str):
-    found = RE_CALL.findall(src)
+    tmp_src = re.sub(r'//.*', '', src)
+    tmp_src = re.sub(r'/\*.*?\*/', '', tmp_src, flags=re.DOTALL)
+    found = RE_CALL.findall(tmp_src)
     ops = []
     caps = []
     seen = set()
@@ -45,6 +47,10 @@ def validate_and_collect(src: str):
             cap = OP_CAPS[key]
             if cap not in caps:
                 caps.append(cap)
+    if not ops and not errors:
+        stripped = re.sub(r'[\s;{}()\[\],\'\"=]+', '', tmp_src)
+        if stripped and 'import' not in tmp_src:
+            errors.append(f"Syntax error: no valid JOCKY operation found in source. Expected like system.info() — got: {src.strip()[:60]!r}")
     return ops, caps, errors
 
 def generate_ir(src: str, seed: int, poly: bool) -> str:

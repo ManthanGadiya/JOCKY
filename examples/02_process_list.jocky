@@ -1,0 +1,4 @@
+// 02_process_list.jocky — process tree with ppid anomaly + YARA
+// Synthetic 4-proc tree: systemd -> explorer -> svchost (ppid_anomaly) -> malware.exe (yara)
+// Risk 60 HIGH, Sigma jocky-001, MITRE T1055
+process.list();

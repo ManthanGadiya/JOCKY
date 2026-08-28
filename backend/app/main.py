@@ -104,6 +104,39 @@ def _update_case_risk(case_id: int, risk: int):
         except Exception:
             pass
 
+def _reset_case(case_id: int):
+    global cases, evidence_store, findings
+    # in-memory
+    cases = [c for c in cases if c["id"] != case_id]
+    evidence_store[:] = [e for e in evidence_store if e.get("case_id") != case_id]
+    findings[:] = [f for f in findings if f.get("case_id") != case_id]
+    # db
+    if _db_available():
+        try:
+            _db.db_clear_case(case_id)
+            # also remove case row if exists
+            s = _db.get_session()
+            if s:
+                from .models import Case as _Case
+                c = s.get(_Case, case_id)
+                if c:
+                    s.delete(c)
+                    s.commit()
+                s.close()
+        except Exception as e:
+            print(f"[reset] case {case_id} db failed: {e}")
+
+def _reset_all():
+    global cases, evidence_store, findings
+    cases.clear()
+    evidence_store.clear()
+    findings.clear()
+    if _db_available():
+        try:
+            _db.db_clear_all()
+        except Exception as e:
+            print(f"[reset] all db failed: {e}")
+
 # Whitelist per SECURITY_MODEL.md §16 + tools/jockyc.py
 OP_CAPS = {
     "system.info": "system.read",
@@ -138,7 +171,10 @@ DEFAULT_POLICY = {
 RE_CALL = re.compile(r'([a-zA-Z_][a-zA-Z0-9_]*)\.([a-zA-Z_][a-zA-Z0-9_]*)\s*\(')
 
 def validate_and_collect(source: str):
-    found = RE_CALL.findall(source)
+    # strip comments before scanning for forensic calls — prevents // sample.exe ( -> false hit
+    tmp_src = re.sub(r'//.*', '', source)
+    tmp_src = re.sub(r'/\*.*?\*/', '', tmp_src, flags=re.DOTALL)
+    found = RE_CALL.findall(tmp_src)
     ops, caps, seen = [], [], set()
     errors = []
     for ns, meth in found:
@@ -151,6 +187,13 @@ def validate_and_collect(source: str):
             cap = OP_CAPS[key]
             if cap not in caps:
                 caps.append(cap)
+    # Fail-closed for gibberish like system.i.lisidence/saons(); -> no valid ops but source non-empty
+    if not ops and not errors:
+        tmp = tmp_src
+        stripped = re.sub(r'[\s;{}()\[\],\'\"=]+', '', tmp)
+        # allow purely empty or import-only or comment-only as valid nop
+        if stripped and 'import' not in tmp:
+            errors.append(f"Syntax error: no valid JOCKY operation found in source. Expected like system.info() — got: {source.strip()[:60]!r}")
     return ops, caps, errors
 
 def sha12(s: str) -> str:
@@ -462,6 +505,58 @@ def list_cases():
     cs = _get_cases()
     evs = _get_evidence()
     return {"cases": cs, "count": len(cs), "evidence": len(evs), "db": _db_available()}
+
+class ResetRequest(BaseModel):
+    case_id: Optional[int] = None
+
+@app.post("/api/reset")
+def reset_all(req: ResetRequest = ResetRequest()):
+    if req.case_id is not None:
+        _reset_case(req.case_id)
+        return {"status": "reset", "case_id": req.case_id, "db": _db_available()}
+    else:
+        _reset_all()
+        return {"status": "reset_all", "db": _db_available()}
+
+@app.get("/api/cases/{case_id}/reset")
+def reset_case(case_id: int):
+    _reset_case(case_id)
+    return {"status": "reset", "case_id": case_id}
+
+@app.get("/api/examples")
+def list_examples():
+    # list .jocky files in examples/ (host) or /app/examples (Docker)
+    import pathlib
+    roots = ["/app/examples", "examples", "./examples", "D:/SIH/examples"]
+    files=[]
+    for r in roots:
+        p = pathlib.Path(r)
+        if p.exists() and p.is_dir():
+            for f in sorted(p.glob("*.jocky")):
+                try:
+                    txt = f.read_text(encoding="utf-8", errors="ignore")
+                    # brief preview first 2 lines
+                    preview = txt.strip().splitlines()[0][:80] if txt.strip() else ""
+                    files.append({"name": f.name, "path": str(f), "preview": preview, "size": len(txt)})
+                except Exception:
+                    files.append({"name": f.name, "path": str(f), "preview": "", "size": 0})
+            if files:
+                break
+    return {"examples": files, "count": len(files)}
+
+@app.get("/api/examples/{name}")
+def get_example(name: str):
+    import pathlib
+    # sanitize: only basename, no traversal
+    if ".." in name or "/" in name or "\\" in name:
+        raise HTTPException(status_code=400, detail="invalid example name")
+    roots = ["/app/examples", "examples", "./examples", "D:/SIH/examples"]
+    for r in roots:
+        p = pathlib.Path(r) / name
+        if p.exists() and p.is_file():
+            txt = p.read_text(encoding="utf-8", errors="ignore")
+            return {"name": name, "content": txt, "size": len(txt)}
+    raise HTTPException(status_code=404, detail=f"example not found: {name}")
 
 @app.post("/api/evidence")
 def post_evidence(ev: Evidence):

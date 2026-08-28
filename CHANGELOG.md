@@ -4,7 +4,27 @@ All notable changes to JOCKY will be documented in this file.
 
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/) and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [Unreleased] — Bugfix Branch `feature/bugfix-reset-validation-examples` (Not Merged)
+
+## 2026-08-28 — Bugfix: Reset, Validation, Examples (Branch Only)
+
+### Fixed
+- **Bug 1 Stacking:** Graph/timeline/findings stacked on repeated `POST /api/run` (evidence never cleared). Added `POST /api/reset {case_id}` + `GET /api/cases/{id}/reset` (clears in-memory `evidence_store/findings/cases` + Postgres `db_clear_case/clear_all` + case row) + helper `_reset_case/_reset_all`. Frontend **Reset Case {id}** (amber) + **Reset All** (red) buttons in editor — after reset `refresh()` clears graph/timeline to demo fallback. Verified live case 300: 1→2→reset→0, case 301: 2→reset→0.
+- **Bug 2 Validation:** `system.i.lisidence/saons();` incorrectly `run ok` (produced `nop`) because `RE_CALL` not stripped of `//` comments (`sample.exe (` in comment falsely matched `sample.exe`) and empty-ops check missing. Fixed `validate_and_collect()` in `backend/app/main.py`, `tools/jockyc.py`, `jocky/src/IRGen.cpp` to strip `//` + `/* */` before `RE_CALL`, and fail-closed when `ops empty` but `stripped (comments removed)` non-empty and no `import` → `422 Syntax error: no valid JOCKY operation…`. Verified: `tools/jockyc.py` `03_file_hash.jocky` now succeeds, gibberish → exit 2 / 422.
+
+### Added
+- **Bug 3 Examples:** Evidence always same synthetic. Added 7 verified examples in `examples/` (`01_system_info.jocky` … `07_triage.jocky` + existing 2 = 9) + backend `GET /api/examples` (list 9, preview, size) + `GET /api/examples/{name}` (basename sanitized, `..`/`/` → 400, `404` for path slash) with volume mount `examples:/app/examples:ro` in `docker-compose.yml` (now 3 mounts: yara+testdata+examples). Frontend `fetchExamples()` on mount, **— Load example —** dropdown (9) + `loadExample(name)` → editor with `Loaded example {name}` toast. Verified live: `GET /api/examples` 9, `GET /api/examples/01_system_info.jocky` → `system.info()`, different examples → different `type` payloads.
+- `backend/app/db.py` — `db_clear_case(case_id)` + `db_clear_all()` (used by reset)
+- `tests/test_bugfix.py` (10) — gibberish 422 (compile+run), empty still nop, reset case/all, examples list/fetch/traversal block, different examples different types, file hash example
+
+### Changed
+- `docker-compose.yml` — backend volumes now 3: `yara+testdata+examples`
+- `frontend/src/App.tsx` — editor header now has example dropdown + `Reset Case`/`Reset All` buttons alongside Compile/Run, still has full sweep buttons
+- `docs/STATUS.md` / `STATUS.md` — added Bugfix recent changes, Database row still 🟢, Dashboard now includes reset + examples
+
+### Verified
+- `pytest` **51/51** (41 + 10 bugfix) all passing on host (including `03_file_hash.jocky` after comment fix)
+- Docker :8000 `POST /api/compile {system.i.lisidence/saons();}` → 422, `GET /api/examples` 9, `GET /api/examples/01_system_info.jocky` → `system.info()`, reset flow live verified, frontend `— Load example —` + Reset buttons visible after `docker compose build --no-cache frontend`
 
 ## 2026-08-28 — YARA Binary — hash ≠ detection (Point 1+2) via yara 4.5.2
 

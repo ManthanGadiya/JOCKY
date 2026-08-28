@@ -1,0 +1,5 @@
+// 07_triage.jocky — triage with file + network, demonstrates path traversal protection
+// Try file.hash("../../etc/passwd") -> should fail 400 traversal
+system.info();
+file.hash("/tmp/malware.exe");
+network.connections();

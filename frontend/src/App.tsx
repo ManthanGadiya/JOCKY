@@ -27,9 +27,47 @@ export default function App(){
   const [lastRun, setLastRun] = useState<string>("")
   const [yara, setYara] = useState<any>(null)
   const [poly, setPoly] = useState<any>(null)
+  const [examples, setExamples] = useState<any[]>([])
+  const [selectedExample, setSelectedExample] = useState<string>("")
 
   const fetchYara = async ()=>{
     try{ const r=await fetch(`${API}/api/yara/status`).then(r=>r.json()); setYara(r) }catch{}
+  }
+  const fetchExamples = async ()=>{
+    try{ const r=await fetch(`${API}/api/examples`).then(r=>r.json()); setExamples(r.examples||[]) }catch{}
+  }
+  const loadExample = async (name:string)=>{
+    if(!name) return
+    try{
+      const r=await fetch(`${API}/api/examples/${name}`).then(r=>r.json())
+      setSource(r.content||'')
+      setSelectedExample(name)
+      setLastRun(`Loaded example ${name} (${r.size} bytes) — click Run to execute`)
+    }catch(e:any){ setError(e.message||String(e)) }
+  }
+  const resetCase = async ()=>{
+    setLoading(true); setError("")
+    try{
+      const res=await fetch(`${API}/api/reset`,{method:'POST',headers:{'Content-Type':'application/json'},body: JSON.stringify({case_id: caseId})})
+      const data=await res.json()
+      if(!res.ok) throw new Error(data.detail||'reset failed')
+      setLastRun(`Reset case ${caseId} — cleared`)
+      await refresh(caseId)
+      setIr(""); setCaps([]); setOps([])
+    }catch(e:any){ setError(e.message||String(e)) }
+    finally{ setLoading(false) }
+  }
+  const resetAll = async ()=>{
+    setLoading(true); setError("")
+    try{
+      const res=await fetch(`${API}/api/reset`,{method:'POST',headers:{'Content-Type':'application/json'},body: JSON.stringify({})})
+      const data=await res.json()
+      if(!res.ok) throw new Error(data.detail||'reset failed')
+      setLastRun(`Reset all — cleared`)
+      await refresh(caseId)
+      setIr(""); setCaps([]); setOps([])
+    }catch(e:any){ setError(e.message||String(e)) }
+    finally{ setLoading(false) }
   }
   const runPoly = async ()=>{
     setLoading(true); setError("")
@@ -60,7 +98,7 @@ export default function App(){
     }catch(e){/* fallback keeps last values */}
   }
 
-  useEffect(()=>{ refresh(caseId); fetchYara() },[caseId])
+  useEffect(()=>{ refresh(caseId); fetchYara(); fetchExamples() },[caseId])
   // poll every 5s for live updates
   useEffect(()=>{
     const id=setInterval(()=>{ refresh(caseId); fetchYara() }, 5000)
@@ -138,8 +176,19 @@ export default function App(){
         </div>
         <div className="grid grid-cols-12 gap-4">
           <div className="col-span-5">
-            <label className="text-xs text-zinc-400">JOCKY source (.jocky)</label>
+            <div className="flex gap-2 items-center mb-1">
+              <label className="text-xs text-zinc-400">JOCKY source (.jocky)</label>
+              <select value={selectedExample} onChange={e=>loadExample(e.target.value)} className="ml-auto bg-zinc-950 border border-zinc-700 rounded px-2 py-1 text-xs">
+                <option value="">— Load example —</option>
+                {examples.map((ex:any)=><option key={ex.name} value={ex.name}>{ex.name}</option>)}
+              </select>
+              <span className="text-xs text-zinc-500">{examples.length} examples</span>
+            </div>
             <textarea value={source} onChange={e=>setSource(e.target.value)} rows={8} className="w-full mt-1 bg-zinc-950 border border-zinc-700 rounded p-2 font-mono text-sm" placeholder={"system.info();"} />
+            <div className="flex gap-2 mt-2 flex-wrap">
+              <button onClick={resetCase} disabled={loading} className="bg-amber-700 hover:bg-amber-600 px-3 py-2 rounded text-xs">Reset Case {caseId}</button>
+              <button onClick={resetAll} disabled={loading} className="bg-red-700 hover:bg-red-600 px-3 py-2 rounded text-xs">Reset All</button>
+            </div>
             <div className="flex gap-2 mt-2 flex-wrap">
               <button onClick={runCompile} disabled={loading} className="bg-zinc-800 hover:bg-zinc-700 border border-zinc-700 px-4 py-2 rounded text-sm disabled:opacity-50">Compile</button>
               <button onClick={runExecute} disabled={loading} className="bg-violet-600 hover:bg-violet-500 px-4 py-2 rounded text-sm font-semibold disabled:opacity-50">Run</button>

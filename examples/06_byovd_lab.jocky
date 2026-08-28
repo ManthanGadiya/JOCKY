@@ -1,0 +1,4 @@
+// 06_byovd_lab.jocky — BYOVD lab (vulnerable driver + process anomaly)
+// Combines process ppid anomaly with driver scan; Sigma + YARA
+process.list();
+driver.scan("RTCore64.sys");

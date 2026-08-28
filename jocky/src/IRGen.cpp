@@ -49,9 +49,24 @@ IRResult generateIRWithValidation(const std::string& jockySource, uint32_t seed,
   IRResult res;
   res.ir_version = 1;
   res.source_hash = sha12(jockySource);
-  // find all namespace.method calls via regex
+  // strip // and /* */ comments before scanning for forensic calls (prevents sample.exe ( in comment -> false hit)
+  std::string tmpSrc = jockySource;
+  // remove // comments
+  {
+    std::string out;
+    for(size_t i=0;i<tmpSrc.size();){
+      if(i+1<tmpSrc.size() && tmpSrc[i]=='/' && tmpSrc[i+1]=='/'){
+        while(i<tmpSrc.size() && tmpSrc[i]!='\n') i++;
+      } else if(i+1<tmpSrc.size() && tmpSrc[i]=='/' && tmpSrc[i+1]=='*'){
+        i+=2;
+        while(i+1<tmpSrc.size() && !(tmpSrc[i]=='*' && tmpSrc[i+1]=='/')) i++;
+        if(i+1<tmpSrc.size()) i+=2;
+      } else out+=tmpSrc[i++];
+    }
+    tmpSrc = out;
+  }
   std::regex re(R"(([a-zA-Z_][a-zA-Z0-9_]*)\.([a-zA-Z_][a-zA-Z0-9_]*)\s*\()");
-  std::sregex_iterator it(jockySource.begin(), jockySource.end(), re);
+  std::sregex_iterator it(tmpSrc.begin(), tmpSrc.end(), re);
   std::sregex_iterator end;
   std::vector<std::pair<std::string,std::string>> found;
   for(; it!=end; ++it){
@@ -80,8 +95,23 @@ IRResult generateIRWithValidation(const std::string& jockySource, uint32_t seed,
     std::unordered_set<std::string> cset(res.capabilities.begin(), res.capabilities.end());
     res.capabilities.assign(cset.begin(), cset.end());
   }
-  // if no ops found but source non-empty and contains a member call pattern that was rejected above would have errored
-  // otherwise generate IR text (delegates to generateIRText for backward compat)
+  // Fail-closed for gibberish with no valid ops but source non-empty (e.g. system.i.lisidence)
+  if(res.ops.empty()){
+    std::string tmp = jockySource;
+    // strip // comments
+    std::regex re_line(R"(//.*)");
+    tmp = std::regex_replace(tmp, re_line, "");
+    std::regex re_block(R"(/\*.*?\*/)");
+    // manual block stripping (ECMAScript dotall not fully supported cross-line) - simple remove
+    // fallback: if no valid ops but tmp after stripping whitespace/semicolons still non-empty and no import, error
+    std::string stripped;
+    for(char c: tmp){ if(!isspace((unsigned char)c) && c!=';' && c!='{' && c!='}' && c!='(' && c!=')' && c!='[' && c!=']' && c!=',' && c!='"' && c!='\'' && c!='=') stripped+=c; }
+    if(!stripped.empty() && tmp.find("import")==std::string::npos){
+      res.code = 2;
+      res.error = "Syntax error: no valid JOCKY operation found in source. Expected like system.info() — got: " + jockySource.substr(0,60);
+      return res;
+    }
+  }
   res.ir = generateIRText(jockySource, seed, poly);
   // prepend validated header (we regenerate header part with capabilities)
   // Inject after first line: add IR_VERSION and IR_CAPS

@@ -212,15 +212,31 @@ def db_list_findings(case_id: Optional[int] = None) -> Optional[List[Dict[str, A
     finally:
         s.close()
 
-def db_clear_for_tests():
-    """Clear all tables — used only in tests when DB is available."""
+def db_clear_case(case_id: int):
     if not is_db_available():
-        return
+        return False
+    s = get_session()
+    try:
+        s.query(Finding).filter(Finding.case_id == case_id).delete()
+        s.query(Evidence).filter(Evidence.case_id == case_id).delete()
+        s.commit()
+        return True
+    finally:
+        s.close()
+
+def db_clear_all():
+    if not is_db_available():
+        return False
     s = get_session()
     try:
         s.query(Finding).delete()
         s.query(Evidence).delete()
         s.query(Case).delete()
         s.commit()
+        return True
     finally:
         s.close()
+
+def db_clear_for_tests():
+    """Clear all tables — used only in tests when DB is available."""
+    return db_clear_all()
