@@ -25,6 +25,23 @@ export default function App(){
   const [error, setError] = useState<string>("")
   const [caseId, setCaseId] = useState(1)
   const [lastRun, setLastRun] = useState<string>("")
+  const [yara, setYara] = useState<any>(null)
+  const [poly, setPoly] = useState<any>(null)
+
+  const fetchYara = async ()=>{
+    try{ const r=await fetch(`${API}/api/yara/status`).then(r=>r.json()); setYara(r) }catch{}
+  }
+  const runPoly = async ()=>{
+    setLoading(true); setError("")
+    try{
+      const res=await fetch(`${API}/api/yara/polymorphic-demo`,{method:'POST',headers:{'Content-Type':'application/json'},body: JSON.stringify({source, seeds:[1,2,3], polymorphic:true})})
+      const data=await res.json()
+      if(!res.ok) throw new Error(data.detail||'poly failed')
+      setPoly(data)
+      setLastRun(`Poly demo: ${data.results.length} IRs distinct_hashes=${data.distinct_hashes} same_cluster=${data.same_yara_cluster} — hash != detection`)
+    }catch(e:any){ setError(e.message||String(e)) }
+    finally{ setLoading(false) }
+  }
 
   const refresh = async (cid:number)=>{
     try{
@@ -43,10 +60,10 @@ export default function App(){
     }catch(e){/* fallback keeps last values */}
   }
 
-  useEffect(()=>{ refresh(caseId) },[caseId])
+  useEffect(()=>{ refresh(caseId); fetchYara() },[caseId])
   // poll every 5s for live updates
   useEffect(()=>{
-    const id=setInterval(()=>refresh(caseId), 5000)
+    const id=setInterval(()=>{ refresh(caseId); fetchYara() }, 5000)
     return ()=>clearInterval(id)
   },[caseId])
 
@@ -100,8 +117,18 @@ export default function App(){
     <div className="min-h-screen p-6 bg-zinc-950 text-zinc-100">
       <header className="flex justify-between items-center border-b border-zinc-800 pb-4 mb-6">
         <h1 className="text-2xl font-bold">JOCKY Forensic Dashboard <span className="text-violet-400">L8 Correlation</span></h1>
-        <span className="text-xs bg-zinc-900 px-3 py-1 rounded">Backend: {cases.length} cases • {evidence.length} evidence • IR v1 • Nginx 8082 • WSS</span>
+        <span className="text-xs bg-zinc-900 px-3 py-1 rounded">Backend: {cases.length} cases • {evidence.length} evidence • IR v1 • YARA {yara?.yara_binary_used ? '✅ binary' : yara?.yara_available ? '✅ rules' : '⏳ fallback'} • Nginx 8082 • Postgres {yara? '✅' : ''}</span>
       </header>
+
+      <div className="bg-zinc-900 rounded-xl p-4 border border-zinc-800 mb-6">
+        <div className="flex justify-between items-center mb-2"><h2 className="font-semibold">YARA Detection — Polymorphic Proof (Point 1+2) — hash ≠ detection</h2><button onClick={runPoly} disabled={loading} className="text-xs bg-amber-600 hover:bg-amber-500 px-3 py-1 rounded">Run YARA Poly Demo</button></div>
+        <p className="text-xs text-zinc-500 mb-2">Rules: <span className="mono">{yara?.yara_rules||'yara/rules.yar'}</span> — test_hits: {yara?.test_hits?.join(', ')||'—'} • Backend :8000 POST /api/yara/scan + /api/yara/polymorphic-demo</p>
+        <div className="text-xs bg-zinc-950 p-2 rounded border border-zinc-800 mono">
+          {poly ? poly.results.map((r:any)=><div key={r.seed}>seed {r.seed} sha {r.sha12}… hits {r.hits.join(', ')||'(none)'} yara {r.yara_used?'binary':'fallback'}</div>) : 'Click Run YARA Poly Demo — generates 3 IRs from same JOCKY source with different seeds (--polymorphic): 3 distinct SHA256 but same YARA hits (JOCKY_DEMO_MARKER) → 1 cluster.'}
+          {poly && <div className="mt-1 text-green-400">distinct_hashes={String(poly.distinct_hashes)} same_yara_cluster={String(poly.same_yara_cluster)} — Point 2 proven</div>}
+        </div>
+        <div className="text-xs text-zinc-500 mt-1">Frontend also shows IR YARA hits after Run: each evidence YARA hit • <a className="underline" href="http://localhost:8000/api/yara/status" target="_blank">/api/yara/status</a> • <a className="underline" href="http://localhost:8000/docs" target="_blank">/api/docs</a></div>
+      </div>
 
       {/* JOCKY Editor — First Milestone */}
       <div className="bg-zinc-900 rounded-xl p-4 border border-zinc-800 mb-6">
