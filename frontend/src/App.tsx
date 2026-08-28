@@ -6,6 +6,8 @@ import RiskGauge from './components/RiskGauge'
 const API = 'http://localhost:8000'
 const DEFAULT_SRC = `system.info();
 process.list();
+file.hash("/evidence/sample.exe");
+network.connections();
 `
 
 export default function App(){
@@ -92,12 +94,15 @@ export default function App(){
           <div className="col-span-5">
             <label className="text-xs text-zinc-400">JOCKY source (.jocky)</label>
             <textarea value={source} onChange={e=>setSource(e.target.value)} rows={8} className="w-full mt-1 bg-zinc-950 border border-zinc-700 rounded p-2 font-mono text-sm" placeholder={"system.info();"} />
-            <div className="flex gap-2 mt-2">
+            <div className="flex gap-2 mt-2 flex-wrap">
               <button onClick={runCompile} disabled={loading} className="bg-zinc-800 hover:bg-zinc-700 border border-zinc-700 px-4 py-2 rounded text-sm disabled:opacity-50">Compile</button>
               <button onClick={runExecute} disabled={loading} className="bg-violet-600 hover:bg-violet-500 px-4 py-2 rounded text-sm font-semibold disabled:opacity-50">Run</button>
-              <button onClick={()=>setSource("system.info();")} className="text-xs px-2 py-1 bg-zinc-800 rounded">system.info();</button>
-              <button onClick={()=>setSource("process.list();")} className="text-xs px-2 py-1 bg-zinc-800 rounded">process.list();</button>
-              <button onClick={()=>setSource("edr.disable();")} className="text-xs px-2 py-1 bg-red-900 rounded">edr.disable(); (should fail)</button>
+              <button onClick={()=>setSource("system.info();")} className="text-xs px-2 py-1 bg-zinc-800 rounded">system.info()</button>
+              <button onClick={()=>setSource("process.list();")} className="text-xs px-2 py-1 bg-zinc-800 rounded">process.list()</button>
+              <button onClick={()=>setSource('file.hash("/evidence/sample.exe");')} className="text-xs px-2 py-1 bg-zinc-800 rounded">file.hash</button>
+              <button onClick={()=>setSource("network.connections();")} className="text-xs px-2 py-1 bg-zinc-800 rounded">net.conns</button>
+              <button onClick={()=>setSource("system.info();\nprocess.list();\nfile.hash(\"/evidence/sample.exe\");\nnetwork.connections();")} className="text-xs px-2 py-1 bg-violet-900 rounded">full sweep</button>
+              <button onClick={()=>setSource('file.hash("../../etc/passwd");')} className="text-xs px-2 py-1 bg-red-900 rounded">traversal (fail)</button>
             </div>
             {error && <div className="mt-2 text-xs text-red-400 bg-red-950 border border-red-900 p-2 rounded">Error: {error}</div>}
             {lastRun && !error && <div className="mt-2 text-xs text-green-400 bg-green-950 border border-green-900 p-2 rounded">{lastRun}</div>}
@@ -117,8 +122,15 @@ export default function App(){
           <p className="text-xs text-zinc-500 mb-2">Host → Evidence nodes (op/type) → Finding • MITRE {graph.mitre?.join(', ')||'T1055/T1068'} • {graph.nodes?.length||0} nodes {evidence.length} evidence</p>
           <Graph data={graph} />
           {evidence.length>0 && <div className="mt-3 text-xs"><div className="font-semibold mb-1">Evidence store (case {caseId}) — canonical envelope schema_version 1 + integrity SHA256:</div>
-            <div className="space-y-1 max-h-40 overflow-auto bg-zinc-950 p-2 rounded border border-zinc-800">
-              {evidence.slice(-5).map((e:any)=><div key={e.id} className="font-mono text-xs"><span className="text-violet-400">{e.id}</span> {e.op} {e.type} risk {e.risk} sha {String(e.sha256||'').slice(0,12)}…</div>)}
+            <div className="space-y-1 max-h-52 overflow-auto bg-zinc-950 p-2 rounded border border-zinc-800">
+              {evidence.slice(-8).map((e:any)=>{
+                const p=e.payload||{}
+                const detail = e.type==='process' ? `${p.count} procs${p.processes?.some((x:any)=>x.ppid_anomaly)?' • ppid anomaly':''}` :
+                  e.type==='file' ? `${p.path} ${p.hashes?.sha256?.slice(0,12)??''} ${p.yara_hit?'• YARA':''}` :
+                  e.type==='network' ? `${p.connections?.length} conns ${p.connections?.some((c:any)=>c.remote_address==='192.0.2.20')?'• C2':''}` :
+                  JSON.stringify(p).slice(0,80)
+                return <div key={e.id} className="font-mono text-xs"><span className="text-violet-400">{e.id}</span> {e.op} risk {e.risk} • {detail}</div>
+              })}
             </div>
           </div>}
         </div>
@@ -126,8 +138,8 @@ export default function App(){
           <RiskGauge risk={risk} />
           <div className="bg-zinc-900 rounded-xl p-4 border border-zinc-800">
             <h3 className="font-semibold">Findings — Live</h3>
-            {findings.length===0 ? <p className="text-sm text-zinc-500 mt-2">No findings yet — Run system.info();</p> :
-              <ul className="text-sm mt-2 space-y-1">{findings.slice(-5).map((f:any)=><li key={f.id} className="text-xs"><span className="text-violet-400">{f.id}</span> {f.rule} {f.severity} risk {f.risk}</li>)}</ul>}
+            {findings.length===0 ? <p className="text-sm text-zinc-500 mt-2">No findings yet — Run a sweep</p> :
+              <ul className="text-sm mt-2 space-y-1">{findings.slice(-8).map((f:any)=><li key={f.id} className="text-xs flex justify-between"><span><span className="text-violet-400">{f.id}</span> {f.rule}</span><span className={f.severity==='CRITICAL'?'text-red-400':f.severity==='HIGH'?'text-orange-400':'text-green-400'}>{f.severity} {f.risk}</span></li>)}</ul>}
           </div>
           <div className="bg-zinc-900 rounded-xl p-4 border border-zinc-800">
             <h3 className="font-semibold">MITRE ATT&CK</h3>

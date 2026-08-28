@@ -159,26 +159,23 @@ Every stage must eventually be independently testable.
 
 ---
 
-# 7. Currently Verified (2026-08-28 E2E Milestone)
+# 7. Currently Verified (2026-08-28 — Forensic Ops Expansion)
 
-### Verified on Host + Docker (evidence logged, 25 tests)
+### Verified on Host + Docker (evidence logged, 31 tests)
 
-* **Host compiler** `tools/jockyc.py` → IR_VERSION=1, IR_CAPS/IR_OPS, EntryPoint, JOCKY_DEMO_MARKER, bb.poly.* — 3 hashes differ (9EF588../58D518../0D0D25..) + `edr.disable()` → exit 2 fail-closed (9 compiler tests)
-* **Backend API** `backend/app/main.py` v1.1.0 via TestClient **and live on :8000**:
-  * `GET /health` → `jocky_ir_version 1`
-  * `POST /api/compile {system.info();}` → ir_version 1, caps [system.read], ops [system.info], source_hash/ir_hash
-  * `POST /api/compile {edr.disable();}` → 422 `Unknown or unsupported capability`
-  * `POST /api/run {system.info();}` → envelope `EV-... schema_version 1 integrity.sha256 provenance.ir_hash chain_of_custody` risk 5 LOW finding F-... (case isolation verified)
-  * `POST /api/run {memory.analyze(1234);}` → 403 `Capability denied`
-  * `GET /api/cases/{id}/timeline` → ordered evidence (live)
-  * `GET /api/cases/{id}/graph` → nodes/edges/mitre live (host→evidence→finding)
-  * `GET /api/cases/{id}/risk` → 5 LOW for system.info
-  * `GET /api/evidence?case_id=` + `/api/findings?case_id=` live
-* **E2E** `system.info();` → Compile → IR v1 → Run → envelope → Timeline/Graph/Risk live (test_e2e + live curl `POST /api/run` on :8000)
-* **Docker** 9 services up: backend :8000, frontend :3000, nginx 8082→80, db (healthy), redis, minio, jocky, detector — verified `docker compose ps`
-* **Dashboard** frontend :3000 Live: JOCKY editor (Compile/Run + edr.disable fail demo), IR pane, live Graph/Timeline/RiskGauge/evidence list, 5s poll
-* **Tests** 25/25 passing: `tests/test_compiler.py` 9 + `tests/test_backend.py` 13 + `tests/test_e2e.py` 3
-* **Docker compose build caches**: backend + frontend rebuilt with new code
+* **Host compiler** `tools/jockyc.py` → IR_VERSION=1, IR_CAPS/IR_OPS, EntryPoint, JOCKY_DEMO_MARKER, bb.poly.* — 3 hashes differ + `edr.disable()` → exit 2 fail-closed (9 compiler tests)
+* **Backend API** `backend/app/main.py` v1.1.1 (enriched) via TestClient **and live on :8000**:
+  * `POST /api/run {system.info();}` → risk 5 LOW (`type:system` envelope)
+  * `POST /api/run {process.list();}` → 4 correlated processes (systemd→explorer→svchost ppid_anomaly→malware.exe yara) risk 60 HIGH, Sigma jocky-001, MITRE T1055
+  * `POST /api/run {file.hash("/evidence/sample.exe");}` → path extracted + validate_path traversal 400, hashes sha256/sha512, YARA JOCKY_DEMO_MARKER for suspicious/malware/sample, risk 55
+  * `POST /api/run {network.connections();}` → 2 conns (C2 192.0.2.20:443 pid 9012 malware.exe + mDNS), MITRE T1071, risk 30
+  * `POST /api/run {system.info(); process.list(); file.hash("/tmp/malware.exe"); network.connections();}` → 4 evidence, risk 60 MEDIUM, star graph host→each evidence + process→file/process→net edges, timeline 4
+  * Fail-closed: `file.hash("../../etc/passwd")` → 400 traversal rejected (SECURITY_MODEL path security), `memory.analyze` → 403, unknown op → 422
+  * Live verified on :8000 case 60 (full sweep 4 evidence, risk 60, graph 6 nodes, timeline 4)
+* **E2E** `system.info();` + `process.list` + `file.hash` + `network.connections` via `POST /api/run` → live curl + `tests/test_e2e.py` + `tests/test_forensic_ops.py` (6)
+* **Docker** 9 services Up verified: backend 8000, frontend 3000 (full sweep editor), nginx 8082, db healthy, redis/minio/jocky/detector
+* **Dashboard** :3000 — JOCKY editor now default `system.info()+process.list+file.hash+network.connections`, buttons for each op + full sweep + traversal fail demo, IR pane IR_VERSION=1, live evidence detail (process counts, file hashes, C2 flags), star graph with correlation edges
+* **Tests** 31/31 passing: `test_compiler` 9 + `test_backend` 13 + `test_e2e` 3 + `test_forensic_ops` 6
 
 ### Still Pending / Not Verified
 
@@ -236,6 +233,21 @@ have succeeded.
 
 # 9. Current Milestone
 
+## Milestone: ✅ Forensic Ops Expansion — process/file/network enriched — COMPLETE (2026-08-28)
+
+### Demo
+
+```jocky
+system.info();
+process.list();
+file.hash("/evidence/sample.exe");
+network.connections();
+```
+
+→ 4 envelopes, correlated graph (host→process/file/net → finding + process→file/net edges), file YARA + process Sigma correlation, risk 60 MEDIUM.
+
+---
+
 ## Milestone: ✅ First Usable Query — `system.info();` E2E — COMPLETE (2026-08-28)
 
 ### Goal
@@ -281,6 +293,19 @@ Progressively add operations per LANGUAGE_SPEC.md §10, each with capability, sy
 ---
 
 # 11. Recent Changes
+
+### 2026-08-28 — Forensic Ops Expansion
+
+#### Added
+- `backend/app/main.py` v1.1.1 — `extract_file_arg()` + `validate_path()` (SECURITY_MODEL path traversal reject, 400), richer `make_envelope()`: `process.list` → 4-proc tree (systemd→explorer→svchost anomaly→malware.exe yara) Sigma jocky-001 T1055 risk 60, `file.hash` → path-aware synthetic with `hashes.sha256/sha512`, suspicious/malware/sample YARA JOCKY_DEMO_MARKER T1105 risk 55, `network.connections` → 2 conns (C2 192.0.2.20:443 pid 9012 + mDNS) T1071 risk 30; combined `system+process+file+net` → 4 evidence star graph
+- `backend/app/main.py` — `calc_risk()` enriched (yara +20, sigma +15, procs combined anomaly+yara bonus +10, file yara +35, C2 +30), graph now star host→evidence + process→file/net correlation edges, mitre set per payload
+- `frontend/src/App.tsx` — default sweep `system.info+process.list+file.hash+network.connections`, buttons for each op + full sweep + traversal fail demo, richer evidence detail (process counts, file hash slice, C2 flag, yara), findings show severity color
+- `tests/test_forensic_ops.py` (6) — file.hash synthetic/ traversal 400, process rich 4-proc/Sigma, network conns, combined sweep 4 evidence star graph verified
+- `frontend/src/components/Graph.tsx` → already live
+
+#### Verified
+- 31/31 tests passing (9+13+3+6)
+- Live on :8000 case 60: full sweep 4 evidence risk 60 MEDIUM graph 6 nodes timeline 4
 
 ### 2026-08-28 — E2E `system.info();` Milestone
 

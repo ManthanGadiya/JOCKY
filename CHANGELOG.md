@@ -6,6 +6,21 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/) and [Sem
 
 ## [Unreleased]
 
+## 2026-08-28 — Forensic Ops Expansion — process/file/network enriched + graph correlation
+
+### Added
+- `backend/app/main.py` v1.1.1 — `extract_file_arg()` + `validate_path()` (400 traversal reject), enriched `make_envelope()`: `process.list` 4-proc tree Sigma T1055 risk 60, `file.hash` path-aware YARA T1105 risk 55, `network.connections` C2 T1071, combined sweep 4 evidence risk 60, star graph `host→evidence` + `process→file/net` edges with mitre set
+- `frontend/src/App.tsx` — default sweep now 4 ops, buttons for `file.hash`/`network.connections`/`full sweep`/`traversal fail`, richer evidence detail panel (process counts, file hash slice, C2 flag)
+- `tests/test_forensic_ops.py` (6) — forensic ops E2E coverage including path traversal, rich payloads, combined graph/timeline
+
+### Changed
+- `backend/app/main.py` — `calc_risk()` now aggregates `processes` anomaly+yara bonus + file yara + C2 remote 192.0.2.20; graph now star + correlation edges
+- `docs/STATUS.md` + `STATUS.md` — 31 tests, forensic ops enriched, docker still Up
+
+### Verified
+- `pytest` 31/31 passing
+- Live `POST /api/run` full sweep case 60: 4 evidence risk 60 MEDIUM graph 6 nodes timeline 4; `file.hash("../../etc/passwd")` → 400 rejected
+
 ## 2026-08-28 — E2E `system.info();` Milestone — First Query from Dashboard Live
 
 ### Added
