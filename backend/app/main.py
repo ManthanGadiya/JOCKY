@@ -137,26 +137,72 @@ def ensure_case(case_id: int) -> Dict[str, Any]:
     cases.append(rec)
     return rec
 
-def make_envelope(op: str, agent_id: str, host_id: str, case_id: int, ir_hash: str, source_hash: str, caps: List[str]):
+def extract_file_arg(source: str, op: str) -> str:
+    # Extract first quoted arg for file.* ops: file.hash("/path") -> /path
+    m = re.search(re.escape(op).replace(r"\.", r"\.") + r'\s*\(\s*["\']([^"\']*)["\']', source)
+    if m:
+        return m.group(1)
+    # also bare arg without quotes (memory.analyze case)
+    m2 = re.search(re.escape(op).replace(r"\.", r"\.") + r'\s*\(\s*([^)\s]+)\s*\)', source)
+    if m2:
+        return m2.group(1).strip('"\'')
+    return ""
+
+def validate_path(path: str):
+    if not path:
+        return
+    if ".." in path or "\x00" in path:
+        raise ValueError(f"Path traversal rejected: {path!r} — contains .. or null byte (SECURITY_MODEL path security)")
+    # allow only safe roots for demo: normalize and reject absolute escapes like /etc/passwd sensitive
+    # For lab we allow /evidence/, /tmp/, C:\, sample.exe, memory.dump etc but reject ../../
+    if path.startswith("/") and not (path.startswith("/evidence/") or path.startswith("/tmp/") or path.startswith("/var/log/") or path.startswith("/sample") or path.startswith("/evidence")):
+        # still allow generic lab paths containing evidence
+        if "passwd" in path or "shadow" in path or "windows/system32/config" in path.lower():
+            raise ValueError(f"Path rejected: {path!r} — outside allowed evidence roots")
+
+def make_envelope(op: str, agent_id: str, host_id: str, case_id: int, ir_hash: str, source_hash: str, caps: List[str], source: str = ""):
     now = datetime.datetime.utcnow().isoformat()+"Z"
     eid = f"EV-{datetime.datetime.utcnow().strftime('%Y%m%d')}-{len(evidence_store)+1:06d}"
-    # synthetic payload per op
     t = op.split(".")[0] if "." in op else op
     payload: Dict[str, Any] = {"jocky_op": op, "ir_hash": ir_hash, "source_hash": source_hash}
     if op == "system.info":
-        payload.update({"type": "system", "hostname": host_id, "os": "linux", "arch": "x86_64", "kernel": "5.15-jocky", "jocky_version": "1.0", "agent_id": agent_id})
+        payload.update({"type": "system", "hostname": host_id, "os": "linux", "arch": "x86_64", "kernel": "5.15-jocky", "jocky_version": "1.0", "agent_id": agent_id, "boot_time": "2026-08-28T00:00:00Z", "timezone": "UTC"})
         ev_type = "system"
     elif op.startswith("process."):
-        payload.update({"type": "process", "processes": [{"pid": 1234, "ppid": 1, "name": "explorer.exe", "hollowed": False}, {"pid": 5678, "ppid": 1234, "name": "svchost.exe"}], "note": "synthetic - no real enumeration"})
+        # richer correlated process tree per FORENSICS_SPEC §11-12
+        processes = [
+            {"pid": 1, "ppid": 0, "name": "systemd", "path": "/sbin/init", "user": "root", "creation_time": "2026-08-28T10:30:00Z", "risk": 0},
+            {"pid": 1234, "ppid": 1, "name": "explorer.exe", "path": "C:\\Windows\\explorer.exe", "user": "analyst", "creation_time": "2026-08-28T10:31:00Z", "ppid_anomaly": False, "risk": 10},
+            {"pid": 5678, "ppid": 1234, "name": "svchost.exe", "path": "C:\\Windows\\System32\\svchost.exe", "user": "SYSTEM", "creation_time": "2026-08-28T10:32:03Z", "ppid_anomaly": True, "risk": 35, "sigma_hit": "jocky-001 Parent Anomaly (T1055)"},
+            {"pid": 9012, "ppid": 5678, "name": "malware.exe", "path": "C:\\Temp\\malware.exe", "user": "analyst", "creation_time": "2026-08-28T10:31:45Z", "parent": 5678, "risk": 75, "yara_hit": "JOCKY_DEMO_MARKER"},
+        ]
+        payload.update({"type": "process", "processes": processes, "count": len(processes), "note": "synthetic - correlated tree per LANGUAGE_SPEC process.list; ppid anomaly flagged per Sigma jocky-001", "sigma_rule": "jocky-001", "mitre": "T1055"})
         ev_type = "process"
     elif op.startswith("file."):
-        payload.update({"type": "file", "path": "/evidence/sample.exe", "sha256": "demo_"+hashlib.sha256(op.encode()).hexdigest()[:16], "note": "synthetic file op"})
+        raw_path = extract_file_arg(source, op) or "/evidence/sample.exe"
+        validate_path(raw_path)
+        sha = hashlib.sha256(raw_path.encode()).hexdigest()
+        low = raw_path.lower()
+        is_suspicious = any(k in low for k in ("suspicious","sample.exe","malware","evil","payload","implant"))
+        payload.update({
+            "type": "file", "path": raw_path, "name": raw_path.split("/")[-1].split("\\")[-1],
+            "size": 1048576 if is_suspicious else 2048, "file_type": "PE32 executable" if raw_path.endswith(".exe") else "text",
+            "creation_time": "2026-08-28T10:31:12Z", "modification_time": "2026-08-28T10:31:12Z",
+            "hashes": {"sha256": sha, "sha512": hashlib.sha512(raw_path.encode()).hexdigest()[:64]},
+            "sha256": sha, "yara_hit": "JOCKY_DEMO_MARKER" if is_suspicious else None,
+            "sigma_hit": None, "mitre": "T1105" if is_suspicious else None,
+            "note": "synthetic file op — no real filesystem read (safe)"
+        })
         ev_type = "file"
     elif op.startswith("network."):
-        payload.update({"type": "network", "connections": [{"local": "192.0.2.10:49152", "remote": "192.0.2.20:443", "state": "ESTABLISHED"}], "note": "synthetic"})
+        conns = [
+            {"local_address": "192.0.2.10", "local_port": 49152, "remote_address": "192.0.2.20", "remote_port": 443, "protocol": "TCP", "state": "ESTABLISHED", "pid": 9012, "process_name": "malware.exe", "observed_at": "2026-08-28T10:32:45Z", "risk": 80, "note": "C2 beacon"},
+            {"local_address": "192.0.2.10", "local_port": 5353, "remote_address": "224.0.0.251", "remote_port": 5353, "protocol": "UDP", "state": "LISTEN", "pid": 5678, "process_name": "svchost.exe", "observed_at": "2026-08-28T10:30:00Z", "risk": 0},
+        ]
+        payload.update({"type": "network", "connections": conns, "count": len(conns), "note": "synthetic — no raw socket capture", "mitre": "T1071"})
         ev_type = "network"
     elif op.startswith("driver."):
-        payload.update({"type": "driver", "driver": {"name": "RTCore64.sys", "vulnerable": False, "note": "synthetic scan — no .sys loaded"}, "note": "synthetic"})
+        payload.update({"type": "driver", "driver": {"name": "RTCore64.sys", "version": "1.0.0", "path": "C:\\Windows\\System32\\drivers\\RTCore64.sys", "publisher": "Micro-Star International", "signature_status": "unsigned", "vulnerable": False, "loldrivers_hit": False, "note": "synthetic scan — no .sys loaded"}, "note": "synthetic"})
         ev_type = "driver"
     elif op.startswith("memory."):
         payload.update({"type": "memory", "memory": {"hollowed": False, "note": "synthetic - no dump read"}, "note": "synthetic"})
@@ -225,8 +271,28 @@ def calc_risk(payload: dict) -> int:
     if isinstance(drv, dict) and drv.get("vulnerable"): r+=30
     if isinstance(drv, dict) and drv.get("loldrivers_hit"): r+=10
     if payload.get("api_unhooking"): r+=25
-    # also direct
-    if payload.get("type") == "system": r = max(r, 5)  # system.info baseline
+    if payload.get("yara_hit") == "JOCKY_DEMO_MARKER": r+=20
+    if payload.get("sigma_hit"): r+=15
+    # process list aggregated risk: check all processes for signals
+    procs = payload.get("processes", [])
+    if isinstance(procs, list):
+        has_anomaly = any(isinstance(p, dict) and p.get("ppid_anomaly") for p in procs)
+        has_yara = any(isinstance(p, dict) and p.get("yara_hit") for p in procs)
+        if has_anomaly: r+=30
+        if has_yara: r+=20
+        if has_anomaly and has_yara: r+=10  # combined bonus for correlated anomalies
+    # file suspicious
+    if payload.get("type") == "file" and payload.get("yara_hit"):
+        r+=35
+    # network C2
+    conns = payload.get("connections", [])
+    if isinstance(conns, list):
+        for c in conns:
+            if isinstance(c, dict) and c.get("remote_address")=="192.0.2.20":
+                r+=30
+                break
+    if payload.get("type") == "system": r = max(r, 5)
+    if payload.get("type") == "process": r = max(r, 15)
     return min(r, 100)
 
 @app.get("/health")
@@ -284,14 +350,17 @@ def run_source(req: RunRequest):
     for op in ops:
         if op == "nop":
             continue
-        rec = make_envelope(op, req.agent_id, req.host_id, req.case_id, ir_hash, src_hash, caps)
+        try:
+            rec = make_envelope(op, req.agent_id, req.host_id, req.case_id, ir_hash, src_hash, caps, req.source)
+        except ValueError as ve:
+            raise HTTPException(status_code=400, detail=str(ve))
         evidence_store.append(rec)
         created.append(rec)
-        # also findings for each
-        findings.append({"id": f"F-{len(findings)+1:06d}", "case_id": req.case_id, "evidence_id": rec["id"], "rule": op, "severity": "INFO" if rec["risk"] <30 else "HIGH" if rec["risk"]<80 else "CRITICAL", "risk": rec["risk"]})
-    # if single op like system.info, we emitted one evidence; keep fallback for nop-only
+        # also findings for each — enriched with MITRE per payload
+        mitre = rec["payload"].get("mitre") or ("T1055" if op.startswith("process.") else "T1105" if op.startswith("file.") else "T1071" if op.startswith("network.") else None)
+        findings.append({"id": f"F-{len(findings)+1:06d}", "case_id": req.case_id, "evidence_id": rec["id"], "rule": op, "severity": "INFO" if rec["risk"] <30 else "HIGH" if rec["risk"]<80 else "CRITICAL", "risk": rec["risk"], "mitre": mitre})
     if not created:
-        rec = make_envelope("system.info", req.agent_id, req.host_id, req.case_id, ir_hash, src_hash, caps)
+        rec = make_envelope("system.info", req.agent_id, req.host_id, req.case_id, ir_hash, src_hash, caps, req.source)
         rec["payload"]["note"] = "nop run — synthetic placeholder"
         evidence_store.append(rec)
         created.append(rec)
@@ -339,20 +408,50 @@ def graph(case_id: int):
     filtered = [e for e in evidence_store if e.get("case_id")==case_id] or evidence_store
     if not filtered:
         return {"nodes": [], "edges": [], "mitre": []}
-    # Build realistic graph: host -> evidence nodes -> finding
-    nodes = [{"id": filtered[0].get("host_id","HOST-001"), "type": "host", "label": filtered[0].get("host_id","HOST-001"), "risk": 0}]
+    host_id = filtered[0].get("host_id","HOST-001")
+    nodes = [{"id": host_id, "type": "host", "label": host_id, "risk": 0}]
     edges = []
-    prev = nodes[0]["id"]
+    # star: host -> each evidence; evidence -> finding if risk notable; process/file/network correlation
+    finding_id = "finding"
+    max_risk = 0
+    mitres = set()
     for e in filtered:
         nid = str(e.get("id"))
-        nodes.append({"id": nid, "type": e.get("type","evidence"), "label": f"{e.get('op')}\n{e.get('type')}", "risk": e.get("risk",0), "op": e.get("op")})
-        edges.append({"from": prev if prev else nid, "to": nid, "label": e.get("op")})
-        prev = nid
-    # finding node
-    max_risk = max([n.get("risk",0) for n in nodes], default=0)
-    nodes.append({"id": "finding", "type": "finding", "label": f"Finding\nRisk {max_risk}", "risk": max_risk})
-    edges.append({"from": prev, "to": "finding"})
-    return {"nodes": nodes, "edges": edges, "mitre": ["T1055.012","T1068"], "case_id": case_id}
+        risk = e.get("risk",0)
+        max_risk = max(max_risk, risk)
+        mitre = e.get("payload",{}).get("mitre")
+        if mitre: mitres.add(mitre)
+        # node label richer per type
+        label = e.get("op","")
+        if e.get("type")=="process":
+            cnt = e.get("payload",{}).get("count",0)
+            label = f"process.list\n{cnt} procs"
+        elif e.get("type")=="file":
+            path = e.get("payload",{}).get("path","")
+            label = f"file.hash\n{path.split('/')[-1].split(chr(92))[-1][:18]}"
+        elif e.get("type")=="network":
+            label = f"net.conns\n{len(e.get('payload',{}).get('connections',[]))} conns"
+        nodes.append({"id": nid, "type": e.get("type","evidence"), "label": label, "risk": risk, "op": e.get("op")})
+        edges.append({"from": host_id, "to": nid, "label": e.get("op")})
+        # correlation edges: file <-> process if process mentions that file path
+        if e.get("type")=="file":
+            # connect to latest process node if exists
+            proc_nodes = [n for n in nodes if n["type"]=="process"]
+            if proc_nodes:
+                edges.append({"from": proc_nodes[-1]["id"], "to": nid, "label": "process→file"})
+        if e.get("type")=="network":
+            proc_nodes = [n for n in nodes if n["type"]=="process"]
+            if proc_nodes:
+                edges.append({"from": proc_nodes[-1]["id"], "to": nid, "label": "process→net"})
+    nodes.append({"id": finding_id, "type": "finding", "label": f"Finding\nRisk {max_risk}", "risk": max_risk})
+    for e in filtered:
+        if e.get("risk",0) >= 30:
+            edges.append({"from": str(e.get("id")), "to": finding_id, "label": "supports"})
+    if not any(e[1]=="finding" for e in [(e["from"], e["to"]) for e in edges]):
+        # ensure at least one edge to finding
+        if filtered:
+            edges.append({"from": str(filtered[-1].get("id")), "to": finding_id})
+    return {"nodes": nodes, "edges": edges, "mitre": sorted(mitres) or ["T1055","T1105","T1071"], "case_id": case_id}
 
 @app.get("/api/cases/{case_id}/risk")
 def risk(case_id: int):
