@@ -49,19 +49,19 @@ Build a safe, reproducible, defensive forensic investigation platform around the
 | Forensic adapters       | 🟠 Scaffolded   | Synthetic only; platform abstraction not yet |
 | Evidence model          | 🟢 Verified     | Canonical envelope schema_version 1 + integrity SHA256 + provenance (tested, E2E) |
 | Agent                   | 🟡 Partial      | C++ stub still; harness is POST /api/run (synthetic) — transport via nginx 8082 live |
-| Backend                 | 🟢 Verified     | Postgres persistence (`db.py` SQLAlchemy) + POST /api/compile + POST /api/run + report PDF + /evidence|findings (35 tests, health `db:true`, live :8000) |
-| Detection engine        | 🟡 Partial      | calc_risk + YARA string hits still; per-evidence finding with MITRE — YARA binary next |
+| Backend                 | 🟢 Verified     | PG persistence + compile/run + report + yara scan/polymorphic-demo + /evidence|findings (41 tests, health `db:true yara:true`) |
+| Detection engine        | 🟢 Verified     | **YARA 4.5 binary** (`yara` + `rules.yar` → `JOCKY_DEMO_MARKER/BYOVD_RTCore64/Process_Hollowing`) via `yara_scan_content()` + fallback string; `POST /api/detect` now yara-used, plus `POST /api/yara/scan` + `GET /api/yara/status`; polymorphic demo proves hash≠detection |
 | Investigation graph     | 🟢 Verified     | Star host→evidence + process→file/net edges, live ReactFlow |
 | Timeline                | 🟢 Verified     | Ordered by observed_at |
-| Dashboard               | 🟢 Verified     | Editor (Compile/Run) + live Graph/Timeline/Risk + findings + 📄 Report PDF (live :3000) |
+| Dashboard               | 🟢 Verified     | Editor + live Graph/Timeline/Risk + findings + 📄 Report PDF + **YARA panel (poly demo: 3 hashes → 1 cluster)** (live :3000) |
 | Report generation       | 🟢 Verified     | PDF via WeasyPrint pydyf 0.11, live 20KB verified |
-| Docker environment      | 🟢 Verified     | 9 Up: backend (pango + postgres) :8000, frontend :3000, nginx 8082, db healthy pgdata persisting, redis/minio/jocky/detector |
-| Database                | 🟢 Verified     | **Postgres 15 persistence** — evidence/cases/findings survive restart (verified live case 90: 2→restart→2), in-memory fallback for host tests |
+| Docker environment      | 🟢 Verified     | 9 Up: backend (pango + postgres + **yara 4.5.2** + rules volume) :8000, frontend (YARA panel) :3000, nginx 8082, db healthy pgdata persisting |
+| Database                | 🟢 Verified     | Postgres 15 persistence — survive restart (case 90: 2→restart→2) |
 | Windows support         | 🔴 Not Verified | Synthetic IDs only |
 | Linux support           | 🟡 Partial      | Synthetic provider; Docker verified |
-| Controlled laboratory   | 🟡 Partial      | 6 fixtures + live full-sweep cases + report |
-| End-to-end workflow     | 🟢 Verified     | Full sweep → envelope → Timeline/Graph/Risk→Report **persists across restart** |
-| Automated tests         | 🟢 Verified     | 35 tests (compiler 9, backend 13, e2e 3, forensic 6, report 4) + live postgres check |
+| Controlled laboratory   | 🟢 Verified     | 6 fixtures + live poly demo (3 IRs same YARA cluster) + full-sweep cases + report |
+| End-to-end workflow     | 🟢 Verified     | Full sweep → envelope → YARA → Timeline/Graph/Risk→Report persists (Point 1+2) |
+| Automated tests         | 🟢 Verified     | **41 tests** (compiler 9, backend 13, e2e 3, forensic 6, report 4, yara 6) all passing |
 
 ---
 
@@ -162,32 +162,27 @@ Every stage must eventually be independently testable.
 
 # 7. Currently Verified (2026-08-28 — Postgres Persistence)
 
-### Verified on Host + Docker (evidence logged, 35 tests + live PG)
+### Verified on Host + Docker (evidence logged, 41 tests + live PG + YARA)
 
-* **Host compiler** `tools/jockyc.py` → IR_VERSION=1, IR_CAPS/IR_OPS, EntryPoint, JOCKY_DEMO_MARKER, bb.poly.* — 3 hashes differ + `edr.disable()` → exit 2 fail-closed (9 compiler tests)
-* **Backend API** `backend/app/main.py` v1.1.1 (enriched) via TestClient **and live on :8000**:
-  * `POST /api/run {system.info();}` → risk 5 LOW (`type:system` envelope)
-  * `POST /api/run {process.list();}` → 4 correlated processes (systemd→explorer→svchost ppid_anomaly→malware.exe yara) risk 60 HIGH, Sigma jocky-001, MITRE T1055
-  * `POST /api/run {file.hash("/evidence/sample.exe");}` → path extracted + validate_path traversal 400, hashes sha256/sha512, YARA JOCKY_DEMO_MARKER for suspicious/malware/sample, risk 55
-  * `POST /api/run {network.connections();}` → 2 conns (C2 192.0.2.20:443 pid 9012 malware.exe + mDNS), MITRE T1071, risk 30
-  * `POST /api/run {system.info(); process.list(); file.hash("/tmp/malware.exe"); network.connections();}` → 4 evidence, risk 60 MEDIUM, star graph host→each evidence + process→file/process→net edges, timeline 4
-  * Fail-closed: `file.hash("../../etc/passwd")` → 400 traversal rejected (SECURITY_MODEL path security), `memory.analyze` → 403, unknown op → 422
-  * Live verified on :8000 case 60 (full sweep 4 evidence, risk 60, graph 6 nodes, timeline 4)
-* **E2E** `system.info();` + `process.list` + `file.hash` + `network.connections` via `POST /api/run` → live curl + `tests/test_e2e.py` + `tests/test_forensic_ops.py` (6)
-* **Docker** 9 services Up verified: backend 8000, frontend 3000 (full sweep editor), nginx 8082, db healthy, redis/minio/jocky/detector
-* **Dashboard** :3000 — editor now default 4-op sweep + traversal fail demo, **📄 Report PDF** button per case → live PDF download
-* **Report** `GET /api/cases/{id}/report` + `POST /api/report` → WeasyPrint 62.3 (pydyf 0.11, pango/cairo) HTML→PDF 20KB with case summary, findings, canonical envelopes, integrity, timeline, graph, provenance (verified `X-Report-Fallback` absent on :8000 Docker, HTML fallback on host)
-* **Postgres** `backend/app/db.py` SQLAlchemy `Case/Evidence/Finding` tables, `DATABASE_URL` `postgresql://jocky:jocky@db:5432/jockydb`, `GET /health` now `db:true`, `POST /api/run` writes to both memory and PG, `GET /evidence` reads PG when available — verified live case 90: 2→`restart backend`→2 persists
-* **Tests** 35/35 passing: 9+13+3+6+4 (host fallback in-memory, Docker PG live)
-* **Docker** pango/cairo rebuilt, backend now reports `postgres:true`
+* **Host compiler** `tools/jockyc.py` → IR_VERSION=1 — 3 hashes differ + `edr.disable()` → exit 2 fail-closed (9 tests)
+* **Backend API** `backend/app/main.py` v1.2.0 (enriched + PG + YARA) via TestClient **and live on :8000**:
+  * `system.info` → risk 5 LOW; `process.list` → 4 procs Sigma T1055 risk 60; `file.hash("/evidence/sample.exe")` → YARA T1105 risk 55 + traversal 400; `network.connections` → C2 T1071 risk 30; full sweep 4 evidence risk 60 star graph 6 nodes
+  * Live case 60 verified 4 evidence, graph 6 nodes, timeline 4
+  * `GET /health` → `db:true postgres:true yara:true yara_rules:/app/yara/rules.yar` (Docker)
+* **Postgres** `db.py` tables, `DATABASE_URL`, `POST /api/run` dual-write, `GET /evidence` PG read — case 90: 2→restart→2 persists
+* **YARA 4.5 binary** inside backend (`/usr/bin/yara`, `/app/yara/rules.yar` volume): `GET /api/yara/status` → `yara_binary_used true test_hits JOCKY_DEMO_MARKER`, `POST /api/yara/scan {JOCKY_DEMO_MARKER}` → hits, `POST /api/yara/polymorphic-demo {seeds 1,2,3}` → 3 distinct SHA256 (`3df…/b6d5…/d450…`) but `same_yara_cluster true` (hash≠detection, Point 1+2) — verified both host fallback and Docker binary
+* **E2E** `system.info+process+file+net` via `POST /api/run` → live + `test_yara` 6
+* **Dashboard** :3000 — 4-op sweep default + traversal fail + **📄 Report PDF** + **YARA panel** (poly demo: 3 hashes → 1 cluster, hash≠detection)
+* **Report** `GET /report` → 20KB `%PDF` (WeasyPrint pydyf 0.11) verified Docker, HTML fallback host
+* **Tests** 41/41: 9+13+3+6+4+6 (compiler/backend/e2e/forensic/report/yara)
+* **Docker** 9 Up: backend (pango+PG+yara 4.5.2) :8000, frontend (YARA panel) :3000, nginx 8082, db healthy pgdata persisting
 
 ### Still Pending / Not Verified
 
-* Real forensic adapter behavior (WinAPI/ETW, /proc) — synthetic only
+* Real forensic adapter (WinAPI/ETW, /proc) — synthetic only
 * Windows native validation (synthetic IDs only)
-* YARA binary scanning (still string-contains in Python; systematic `.ll` file scan via yara binary pending — **next milestone**)
-* Agent binary still stub (POST /api/run harness; real agent POST via nginx not yet)
-* Redis/MinIO not yet wired for artifact storage (declaration only)
+* Agent binary still stub (harness POST /api/run; real agent POST via nginx not yet)
+* Redis/MinIO artifact storage not yet wired
 
 ---
 
@@ -236,6 +231,21 @@ have succeeded.
 ---
 
 # 9. Current Milestone
+
+## Milestone: ✅ YARA Binary — hash ≠ detection (Point 1+2) — COMPLETE (2026-08-28)
+
+### Demo
+
+```bash
+POST /api/yara/polymorphic-demo {source:"system.info();\\nprocess.list();", seeds:[1,2,3], polymorphic:true}
+→ 3 distinct SHA256 (3df847…/b6d5a4…/d45094…) but same_yara_cluster true — all hit JOCKY_DEMO_MARKER via yara binary 4.5.2 (/app/yara/rules.yar)
+```
+
+→ Backend `yara_scan_content()` tries `yara /app/yara/rules.yar` binary (`yara_available` true, `yara_binary_used` true on :8000 Docker, fallback string on host), `POST /api/yara/scan` per-IR/file + `GET /api/yara/status` + `POST /api/detect` now `yara_used` flag. Frontend **YARA panel** shows test_hits, 3-hashes→1-cluster demo, links to `/api/yara/status` + `/api/docs`. Tests 6 yara cases including polymorphic hash≠detection.
+
+### Prior milestones still hold (report PDF 20KB, PG persistence, forensic sweep)
+
+---
 
 ## Milestone: ✅ Report Generation — PDF via WeasyPrint — COMPLETE (2026-08-28)
 
@@ -302,18 +312,31 @@ Progressively add operations per LANGUAGE_SPEC.md §10, each with capability, sy
 2. ✅ IR version + capability whitelist + fail-closed — done (IR_VERSION=1, 422/403)
 3. ✅ Runtime synthetic envelope + backend compile/run — done
 4. ✅ Timeline/Graph/Risk live + Dashboard editor/Run — done
-5. ✅ 25 tests — done
-6. Add `process.list` richer synthetic graph (pid/ppid correlation) + Sigma enrichment
-7. Add `file.hash`/`file.analyze` with payload normalizer (path, hash, file_type)
-8. Add `network.connections` with Remoter/State normalization
-9. Add case isolation UI (dropdown of cases from /api/cases) + host selector
-10. Persist evidence to Postgres (wire sqlalchemy models.py → engine) with fallback to in-memory for tests
-11. Wire YARA binary scanning for .ll polymorphic files (hash≠detection demo)
-12. Report generation (/api/report → WeasyPrint PDF with evidence+findings+provenance)
+5. ✅ Enriched forensic ops (process 4-proc tree Sigma, file hash YARA, network C2) — done (v1.1.1, 6 forensic tests)
+6. ✅ Postgres persistence (evidence/cases/findings survive restart, health db:true, live case 90: 2→restart→2) — done
+7. ✅ YARA 4.5 binary (POST /api/yara/scan, GET /api/yara/status, POST /api/yara/polymorphic-demo hash≠detection) + frontend YARA panel — done (6 yara tests)
+8. ✅ Report PDF (WeasyPrint 20KB, frontend 📄 button) — done (4 report tests)
+9. 41 tests — done (9+13+3+6+4+6)
+10. Case isolation UI (dropdown of cases from /api/cases) + host selector + filter
+11. Wire agent binary real POST via nginx (currently harness POST /api/run; make agent Docker actually curl nginx:80)
+12. Redis/MinIO wiring for artifact storage (currently declared but not used) + WeasyPrint PDF artifact to MinIO (optional)
 
 ---
 
 # 11. Recent Changes
+
+### 2026-08-28 — YARA Binary
+
+#### Added
+- `backend/Dockerfile` — `yara` apt package (`yara 4.5.2`) + existing pango/cairo
+- `docker-compose.yml` — `backend` volumes `yara:/app/yara:ro` + `testdata:/app/testdata:ro` (rules visible as `/app/yara/rules.yar` inside container)
+- `backend/app/main.py` — `yara_scan_content(content) -> (hits, yara_used)` helper: tries `yara /app/yara/rules.yar` via subprocess (binary `4.5.2`), fallback string search (`JOCKY_DEMO_MARKER`/`BYOVD_RTCore64`/`hollowed`) for host; `_yara_rules_path()` probes `/app/yara/rules.yar`, `yara/rules.yar` etc; `YaraScanRequest` + `PolyDemoRequest`, endpoints `POST /api/yara/scan` (sha256 + hits + yara_used), `GET /api/yara/status` (yara_available, test_hits, rules length), `POST /api/yara/polymorphic-demo` (hash≠detection proof: 3 seeds→ distinct hashes but same_yara_cluster true), `POST /api/detect` now delegates to `yara_scan_content` with `yara_used` flag + health now `yara:true`
+- `frontend/src/App.tsx` — YARA panel: fetch `GET /api/yara/status`, `Run YARA Poly Demo` button → `POST /api/yara/polymorphic-demo` (shows 3 seeds sha12… hits + yara_used + distinct_hashes/same_yara_cluster), header badge `YARA ✅ binary` vs fallback, links to `/api/yara/status` + `/api/docs`
+- `tests/test_yara.py` (6) — yara status, scan fallback, BYOVD, polymorphic hash≠detection, detect yara_used, compile IR yara hit
+
+#### Verified
+- Host `pytest` 41/41 (fallback string, yara binary not required)
+- Docker :8000 — `GET /health` `yara:true yara_rules:/app/yara/rules.yar`, `GET /api/yara/status` `yara_binary_used true test_hits JOCKY_DEMO_MARKER`, `POST /api/yara/polymorphic-demo` 3 distinct SHA256 (`3df…/b6d5…/d450…`) → same_yara_cluster true (hash≠detection, Point 1+2), `/usr/bin/yara --version` `4.5.2` inside backend
 
 ### 2026-08-28 — Postgres Persistence
 
