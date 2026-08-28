@@ -3,15 +3,106 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 from typing import Optional, List, Dict, Any
-import hashlib, time, json, re, random, uuid, datetime, io
+import hashlib, time, json, re, random, uuid, datetime, io, os
 
-app = FastAPI(title="JOCKY Backend - Central Forensics (L5+L6+ E2E)", version="1.1.0")
+app = FastAPI(title="JOCKY Backend - Central Forensics (L5+L6+ E2E)", version="1.2.0")
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
 
-# In-memory stores (mirrors Postgres/Redis/MinIO when Docker wired)
+# In-memory stores (fallback when Postgres not reachable — host tests)
 cases: List[Dict[str, Any]] = []
 evidence_store: List[Dict[str, Any]] = []
 findings: List[Dict[str, Any]] = []
+
+# Optional Postgres persistence (Docker: DATABASE_URL=postgresql://...)
+try:
+    from . import db as _db
+except ImportError:
+    try:
+        import backend.app.db as _db
+    except Exception:
+        _db = None
+
+def _db_available() -> bool:
+    return _db is not None and getattr(_db, "is_db_available", lambda: False)()
+
+@app.on_event("startup")
+def _startup_init_db():
+    if _db is not None:
+        try:
+            _db.init_db()
+        except Exception as e:
+            print(f"[startup] db init failed: {e}")
+
+def _get_cases() -> List[Dict[str, Any]]:
+    if _db_available():
+        c = _db.db_list_cases()
+        if c is not None:
+            return c
+    return cases
+
+def _get_evidence(case_id: Optional[int] = None) -> List[Dict[str, Any]]:
+    if _db_available():
+        ev = _db.db_list_evidence(case_id)
+        if ev is not None:
+            return ev
+    if case_id is not None:
+        return [e for e in evidence_store if e.get("case_id")==case_id]
+    return evidence_store
+
+def _get_findings(case_id: Optional[int] = None) -> List[Dict[str, Any]]:
+    if _db_available():
+        f = _db.db_list_findings(case_id)
+        if f is not None:
+            return f
+    if case_id is not None:
+        return [ff for ff in findings if ff.get("case_id")==case_id]
+    return findings
+
+def _add_case(case_id: int, title: str = "", risk: int = 0):
+    # always keep in-memory for fallback, also write to DB if available
+    ensure = None
+    for c in cases:
+        if c["id"]==case_id:
+            ensure=c
+            if risk is not None:
+                c["risk"]=risk
+            break
+    if not ensure:
+        rec={"id": case_id, "title": title or f"case-{case_id}", "created_at": datetime.datetime.utcnow().isoformat()+"Z", "risk": risk}
+        cases.append(rec)
+        ensure=rec
+    if _db_available():
+        try:
+            _db.db_upsert_case(case_id, title, risk)
+        except Exception as e:
+            print(f"[store] case db failed: {e}")
+    return ensure
+
+def _add_evidence(rec: Dict[str, Any]):
+    evidence_store.append(rec)
+    if _db_available():
+        try:
+            _db.db_add_evidence(rec)
+        except Exception as e:
+            print(f"[store] evidence db failed: {e}")
+
+def _add_finding(rec: Dict[str, Any]):
+    findings.append(rec)
+    if _db_available():
+        try:
+            _db.db_add_finding(rec)
+        except Exception as e:
+            print(f"[store] finding db failed: {e}")
+
+def _update_case_risk(case_id: int, risk: int):
+    for c in cases:
+        if c["id"]==case_id:
+            c["risk"]=risk
+    if _db_available():
+        try:
+            _db.db_update_case_risk(case_id, risk)
+        except Exception:
+            pass
 
 # Whitelist per SECURITY_MODEL.md §16 + tools/jockyc.py
 OP_CAPS = {
@@ -131,12 +222,8 @@ def generate_ir(source: str, seed: int, poly: bool):
     return ir_text, ops, caps
 
 def ensure_case(case_id: int) -> Dict[str, Any]:
-    for c in cases:
-        if c["id"] == case_id:
-            return c
-    rec = {"id": case_id, "title": f"case-{case_id}", "created_at": datetime.datetime.utcnow().isoformat()+"Z", "risk": 0}
-    cases.append(rec)
-    return rec
+    # Use helper that writes to both in-memory and DB
+    return _add_case(case_id)
 
 def extract_file_arg(source: str, op: str) -> str:
     # Extract first quoted arg for file.* ops: file.hash("/path") -> /path
@@ -163,7 +250,9 @@ def validate_path(path: str):
 
 def make_envelope(op: str, agent_id: str, host_id: str, case_id: int, ir_hash: str, source_hash: str, caps: List[str], source: str = ""):
     now = datetime.datetime.utcnow().isoformat()+"Z"
-    eid = f"EV-{datetime.datetime.utcnow().strftime('%Y%m%d')}-{len(evidence_store)+1:06d}"
+    # use total count from DB if available, else in-memory, to keep EV ids unique across restarts
+    total = len(_get_evidence())
+    eid = f"EV-{datetime.datetime.utcnow().strftime('%Y%m%d')}-{total+1:06d}"
     t = op.split(".")[0] if "." in op else op
     payload: Dict[str, Any] = {"jocky_op": op, "ir_hash": ir_hash, "source_hash": source_hash}
     if op == "system.info":
@@ -297,18 +386,24 @@ def calc_risk(payload: dict) -> int:
     return min(r, 100)
 
 @app.get("/health")
-def health(): return {"status":"ok","service":"jocky-backend","layers":"L5+L6+L7","version":"1.1.0","jocky_ir_version":1}
+def health():
+    return {"status":"ok","service":"jocky-backend","layers":"L5+L6+L7","version":"1.2.0","jocky_ir_version":1, "db": _db_available(), "postgres": _db_available()}
 
 @app.get("/api/cases")
-def list_cases(): return {"cases": cases, "count": len(cases), "evidence": len(evidence_store)}
+def list_cases():
+    cs = _get_cases()
+    evs = _get_evidence()
+    return {"cases": cs, "count": len(cs), "evidence": len(evs), "db": _db_available()}
 
 @app.post("/api/evidence")
 def post_evidence(ev: Evidence):
     raw = json.dumps(ev.payload, sort_keys=True).encode()
     sha = hashlib.sha256(raw).hexdigest()
     risk = calc_risk(ev.payload)
-    rec = {"id": len(evidence_store)+1, "agent_id": ev.agent_id, "type": ev.type, "payload": ev.payload, "sha256": sha, "timestamp": time.time(), "chain_of_custody": f"{sha}:{ev.agent_id}:{time.time()}", "risk": risk}
-    evidence_store.append(rec)
+    # generate id that is unique across DB + memory
+    total = len(_get_evidence())
+    rec = {"id": f"EV-{datetime.datetime.utcnow().strftime('%Y%m%d')}-{total+1:06d}", "agent_id": ev.agent_id, "type": ev.type, "payload": ev.payload, "sha256": sha, "timestamp": time.time(), "chain_of_custody": f"{sha}:{ev.agent_id}:{time.time()}", "risk": risk, "case_id": 1, "host_id": ev.agent_id, "op": ev.type, "source": "direct_post", "collected_at": datetime.datetime.utcnow().isoformat()+"Z", "observed_at": datetime.datetime.utcnow().isoformat()+"Z", "collector": "jocky-runtime:1.0", "schema_version": 1, "integrity": {"sha256": sha, "verified": True}, "provenance": {"ir_hash": "", "source_hash": "", "capabilities": []}}
+    _add_evidence(rec)
     return rec
 
 @app.post("/api/compile")
@@ -355,21 +450,20 @@ def run_source(req: RunRequest):
             rec = make_envelope(op, req.agent_id, req.host_id, req.case_id, ir_hash, src_hash, caps, req.source)
         except ValueError as ve:
             raise HTTPException(status_code=400, detail=str(ve))
-        evidence_store.append(rec)
+        _add_evidence(rec)
         created.append(rec)
         # also findings for each — enriched with MITRE per payload
         mitre = rec["payload"].get("mitre") or ("T1055" if op.startswith("process.") else "T1105" if op.startswith("file.") else "T1071" if op.startswith("network.") else None)
-        findings.append({"id": f"F-{len(findings)+1:06d}", "case_id": req.case_id, "evidence_id": rec["id"], "rule": op, "severity": "INFO" if rec["risk"] <30 else "HIGH" if rec["risk"]<80 else "CRITICAL", "risk": rec["risk"], "mitre": mitre})
+        fid = f"F-{len(_get_findings())+1:06d}"
+        frec = {"id": fid, "case_id": req.case_id, "evidence_id": rec["id"], "rule": op, "severity": "INFO" if rec["risk"] <30 else "HIGH" if rec["risk"]<80 else "CRITICAL", "risk": rec["risk"], "mitre": mitre}
+        _add_finding(frec)
     if not created:
         rec = make_envelope("system.info", req.agent_id, req.host_id, req.case_id, ir_hash, src_hash, caps, req.source)
         rec["payload"]["note"] = "nop run — synthetic placeholder"
-        evidence_store.append(rec)
+        _add_evidence(rec)
         created.append(rec)
-    max_risk = max([e.get("risk",0) for e in evidence_store if e.get("case_id")==req.case_id], default=0)
-    # update case risk
-    for c in cases:
-        if c["id"]==req.case_id:
-            c["risk"]=max_risk
+    max_risk = max([e.get("risk",0) for e in _get_evidence(req.case_id)], default=0)
+    _update_case_risk(req.case_id, max_risk)
     return {
         "ir": ir,
         "ir_version": 1,
@@ -378,7 +472,7 @@ def run_source(req: RunRequest):
         "capabilities": caps,
         "ops": ops,
         "evidence": created,
-        "findings": [f for f in findings if f["case_id"]==req.case_id],
+        "findings": _get_findings(req.case_id),
         "risk": max_risk,
         "level": "CRITICAL" if max_risk>80 else "HIGH" if max_risk>60 else "MEDIUM" if max_risk>30 else "LOW",
         "case_id": req.case_id,
@@ -386,7 +480,9 @@ def run_source(req: RunRequest):
 
 @app.get("/api/cases/{case_id}/timeline")
 def timeline(case_id: int):
-    filtered = [e for e in evidence_store if e.get("case_id")==case_id] or evidence_store
+    filtered = _get_evidence(case_id)
+    if not filtered:
+        filtered = _get_evidence()
     ordered = sorted(filtered, key=lambda x: x.get("timestamp", 0))
     # normalize to timeline events
     events = []
@@ -406,7 +502,9 @@ def timeline(case_id: int):
 
 @app.get("/api/cases/{case_id}/graph")
 def graph(case_id: int):
-    filtered = [e for e in evidence_store if e.get("case_id")==case_id] or evidence_store
+    filtered = _get_evidence(case_id)
+    if not filtered:
+        filtered = _get_evidence()
     if not filtered:
         return {"nodes": [], "edges": [], "mitre": []}
     host_id = filtered[0].get("host_id","HOST-001")
@@ -456,24 +554,22 @@ def graph(case_id: int):
 
 @app.get("/api/cases/{case_id}/risk")
 def risk(case_id: int):
-    filtered = [e for e in evidence_store if e.get("case_id")==case_id]
+    filtered = _get_evidence(case_id)
     max_risk = max([e.get("risk",0) for e in filtered], default=0)
-    # fallback to global if case empty but evidence exists
-    if max_risk==0 and evidence_store:
-        max_risk = max([e.get("risk",0) for e in evidence_store], default=0)
+    if max_risk==0:
+        all_ev = _get_evidence()
+        max_risk = max([e.get("risk",0) for e in all_ev], default=0)
     return {"case_id": case_id, "risk": max_risk, "level": "CRITICAL" if max_risk>80 else "HIGH" if max_risk>60 else "MEDIUM" if max_risk>30 else "LOW"}
 
 @app.get("/api/evidence")
 def list_evidence(case_id: Optional[int] = None):
-    if case_id is not None:
-        return {"evidence": [e for e in evidence_store if e.get("case_id")==case_id], "count": len([e for e in evidence_store if e.get("case_id")==case_id])}
-    return {"evidence": evidence_store, "count": len(evidence_store)}
+    evs = _get_evidence(case_id)
+    return {"evidence": evs, "count": len(evs)}
 
 @app.get("/api/findings")
 def list_findings(case_id: Optional[int] = None):
-    if case_id is not None:
-        return {"findings": [f for f in findings if f["case_id"]==case_id], "count": len([f for f in findings if f["case_id"]==case_id])}
-    return {"findings": findings, "count": len(findings)}
+    fs = _get_findings(case_id)
+    return {"findings": fs, "count": len(fs)}
 
 @app.websocket("/ws/agent")
 async def ws_agent(ws: WebSocket):
@@ -494,12 +590,12 @@ class ReportRequest(BaseModel):
     include_graph: bool = True
 
 def build_report_html(case_id: int, title: Optional[str] = None) -> str:
-    case = next((c for c in cases if c["id"]==case_id), None)
+    cs = _get_cases()
+    case = next((c for c in cs if c.get("id")==case_id), None)
     if not case:
-        # still generate report for empty case (for UX) — will show 0 evidence
         case = {"id": case_id, "title": title or f"case-{case_id}", "created_at": datetime.datetime.utcnow().isoformat()+"Z", "risk": 0}
-    evs = [e for e in evidence_store if e.get("case_id")==case_id]
-    finds = [f for f in findings if f["case_id"]==case_id]
+    evs = _get_evidence(case_id)
+    finds = _get_findings(case_id)
     risk_val = max([e.get("risk",0) for e in evs], default=0)
     level = "CRITICAL" if risk_val>80 else "HIGH" if risk_val>60 else "MEDIUM" if risk_val>30 else "LOW"
     now = datetime.datetime.utcnow().isoformat()+"Z"

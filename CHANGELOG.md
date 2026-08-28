@@ -6,6 +6,21 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/) and [Sem
 
 ## [Unreleased]
 
+## 2026-08-28 — Postgres Persistence — evidence/cases/findings survive restart
+
+### Added
+- `backend/app/models.py` — expanded `Case/Evidence/Finding` SQLAlchemy tables (evidence_id, host_id, payload/integrity/provenance JSON, chain_of_custody, timestamp)
+- `backend/app/db.py` — `DATABASE_URL` `postgresql://jocky:jocky@db:5432/jockydb`, `init_db()` with 2s timeout + `is_db_available()` fallback to in-memory for host `pytest`, helpers `db_upsert_case`, `db_add_evidence/findings`, `db_list_*`, `db_clear_for_tests`; startup `on_event` creates tables
+- `backend/app/main.py` v1.2.0 — Postgres-aware wrappers `_get_cases/_get_evidence/_get_findings/_add_*`; `make_envelope` now uses `_get_evidence()` total for EV id uniqueness; `GET /health` returns `db:true postgres:true`; all endpoints read from PG when available, fallback to memory; `ensure_case` → `_add_case`
+- `docs/STATUS.md` — Database 🟢 Verified
+
+### Changed
+- `STATUS.md` / `docs/STATUS.md` — Backend now `+ postgres`, Database row 🟢 Verified
+
+### Verified
+- Host `pytest` 35/35 still passing (in-memory fallback, no PG)
+- Docker :8000 — `[db] Connected to db:5432/jockydb — tables ready`, `GET /health` `db:true`, live case 90: 2 evidence → `docker compose restart backend` → `GET /api/evidence?case_id=90` still 2 (persisted)
+
 ## 2026-08-28 — Report Generation — PDF via WeasyPrint
 
 ### Added

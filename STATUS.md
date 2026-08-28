@@ -49,18 +49,19 @@ Build a safe, reproducible, defensive forensic investigation platform around the
 | Forensic adapters       | 🟠 Scaffolded   | Synthetic only; platform abstraction not yet |
 | Evidence model          | 🟢 Verified     | Canonical envelope schema_version 1 + integrity SHA256 + provenance (tested, E2E) |
 | Agent                   | 🟡 Partial      | C++ stub still; harness is POST /api/run (synthetic) — transport via nginx 8082 live |
-| Backend                 | 🟢 Verified     | + POST /api/compile + POST /api/run + GET /api/cases/{id}/report (PDF via WeasyPrint pydyf 0.11) + /evidence?case_id + /findings (35 tests, live :8000) |
-| Detection engine        | 🟡 Partial      | calc_risk + YARA string hits still; per-evidence finding (INFO/HIGH) with MITRE + risk |
-| Investigation graph     | 🟢 Verified     | GET /api/cases/{id}/graph star host→evidence + process→file/net correlation edges, live ReactFlow |
-| Timeline                | 🟢 Verified     | GET /api/cases/{id}/timeline ordered by observed_at + payload detail |
-| Dashboard               | 🟢 Verified     | Editor (Compile/Run) + live Graph/Timeline/Risk + findings + 📄 Report PDF download (live :3000) |
-| Report generation       | 🟢 Verified     | GET /api/cases/{id}/report + POST /api/report → WeasyPrint PDF (HTML fallback on host) — 4 report tests, live PDF 20KB verified |
-| Docker environment      | 🟢 Verified     | 9 services Up: backend (pango/cairo deps) :8000, frontend :3000, nginx 8082, db healthy, redis/minio/jocky/detector — PDF live verified |
-| Windows support         | 🔴 Not Verified | No WinAPI; synthetic HOST-001/WIN-001 IDs only |
-| Linux support           | 🟡 Partial      | Synthetic provider; Docker Linux path verified |
-| Controlled laboratory   | 🟡 Partial      | 6 fixtures + live full-sweep case 60 (4 evidence) + report cases |
-| End-to-end workflow     | 🟢 Verified     | `system.info→process→file→net` → Compile→Run→envelope→Timeline/Graph/Risk→**Report PDF** live E2E |
-| Automated tests         | 🟢 Verified     | 35 tests (compiler 9, backend 13, e2e 3, forensic 6, report 4) all passing |
+| Backend                 | 🟢 Verified     | Postgres persistence (`db.py` SQLAlchemy) + POST /api/compile + POST /api/run + report PDF + /evidence|findings (35 tests, health `db:true`, live :8000) |
+| Detection engine        | 🟡 Partial      | calc_risk + YARA string hits still; per-evidence finding with MITRE — YARA binary next |
+| Investigation graph     | 🟢 Verified     | Star host→evidence + process→file/net edges, live ReactFlow |
+| Timeline                | 🟢 Verified     | Ordered by observed_at |
+| Dashboard               | 🟢 Verified     | Editor (Compile/Run) + live Graph/Timeline/Risk + findings + 📄 Report PDF (live :3000) |
+| Report generation       | 🟢 Verified     | PDF via WeasyPrint pydyf 0.11, live 20KB verified |
+| Docker environment      | 🟢 Verified     | 9 Up: backend (pango + postgres) :8000, frontend :3000, nginx 8082, db healthy pgdata persisting, redis/minio/jocky/detector |
+| Database                | 🟢 Verified     | **Postgres 15 persistence** — evidence/cases/findings survive restart (verified live case 90: 2→restart→2), in-memory fallback for host tests |
+| Windows support         | 🔴 Not Verified | Synthetic IDs only |
+| Linux support           | 🟡 Partial      | Synthetic provider; Docker verified |
+| Controlled laboratory   | 🟡 Partial      | 6 fixtures + live full-sweep cases + report |
+| End-to-end workflow     | 🟢 Verified     | Full sweep → envelope → Timeline/Graph/Risk→Report **persists across restart** |
+| Automated tests         | 🟢 Verified     | 35 tests (compiler 9, backend 13, e2e 3, forensic 6, report 4) + live postgres check |
 
 ---
 
@@ -159,9 +160,9 @@ Every stage must eventually be independently testable.
 
 ---
 
-# 7. Currently Verified (2026-08-28 — Report Generation)
+# 7. Currently Verified (2026-08-28 — Postgres Persistence)
 
-### Verified on Host + Docker (evidence logged, 35 tests)
+### Verified on Host + Docker (evidence logged, 35 tests + live PG)
 
 * **Host compiler** `tools/jockyc.py` → IR_VERSION=1, IR_CAPS/IR_OPS, EntryPoint, JOCKY_DEMO_MARKER, bb.poly.* — 3 hashes differ + `edr.disable()` → exit 2 fail-closed (9 compiler tests)
 * **Backend API** `backend/app/main.py` v1.1.1 (enriched) via TestClient **and live on :8000**:
@@ -176,15 +177,17 @@ Every stage must eventually be independently testable.
 * **Docker** 9 services Up verified: backend 8000, frontend 3000 (full sweep editor), nginx 8082, db healthy, redis/minio/jocky/detector
 * **Dashboard** :3000 — editor now default 4-op sweep + traversal fail demo, **📄 Report PDF** button per case → live PDF download
 * **Report** `GET /api/cases/{id}/report` + `POST /api/report` → WeasyPrint 62.3 (pydyf 0.11, pango/cairo) HTML→PDF 20KB with case summary, findings, canonical envelopes, integrity, timeline, graph, provenance (verified `X-Report-Fallback` absent on :8000 Docker, HTML fallback on host)
-* **Tests** 35/35 passing: `test_compiler` 9 + `test_backend` 13 + `test_e2e` 3 + `test_forensic_ops` 6 + `test_report` 4
+* **Postgres** `backend/app/db.py` SQLAlchemy `Case/Evidence/Finding` tables, `DATABASE_URL` `postgresql://jocky:jocky@db:5432/jockydb`, `GET /health` now `db:true`, `POST /api/run` writes to both memory and PG, `GET /evidence` reads PG when available — verified live case 90: 2→`restart backend`→2 persists
+* **Tests** 35/35 passing: 9+13+3+6+4 (host fallback in-memory, Docker PG live)
+* **Docker** pango/cairo rebuilt, backend now reports `postgres:true`
 
 ### Still Pending / Not Verified
 
-* Real forensic adapter behavior (WinAPI/ETW, /proc) — synthetic provider only
+* Real forensic adapter behavior (WinAPI/ETW, /proc) — synthetic only
 * Windows native validation (synthetic IDs only)
-* YARA binary scanning (still string-contains in Python; systematic .ll file scan via yara binary pending)
-* Persisted store: Postgres/Redis/MinIO declared but evidence still in-memory (lost on restart)
-* Agent binary still stub (POST /api/run is harness; real agent POST via nginx 8082 not yet)
+* YARA binary scanning (still string-contains in Python; systematic `.ll` file scan via yara binary pending — **next milestone**)
+* Agent binary still stub (POST /api/run harness; real agent POST via nginx not yet)
+* Redis/MinIO not yet wired for artifact storage (declaration only)
 
 ---
 
@@ -311,6 +314,17 @@ Progressively add operations per LANGUAGE_SPEC.md §10, each with capability, sy
 ---
 
 # 11. Recent Changes
+
+### 2026-08-28 — Postgres Persistence
+
+#### Added
+- `backend/app/models.py` — expanded SQLAlchemy `Case/Evidence/Finding` tables (evidence_id, host_id, payload JSON, integrity, provenance, chain_of_custody, timestamp, risk, sha256)
+- `backend/app/db.py` — `DATABASE_URL` `postgresql://jocky:jocky@db:5432/jockydb`, `init_db()` + `is_db_available()` with 2s timeout fallback to in-memory for host `pytest`, `db_upsert_case`, `db_add_evidence`, `db_list_evidence`, `db_add_finding`, `db_list_findings`, `db_clear_for_tests`; startup `on_event` connects and `Base.metadata.create_all`
+- `backend/app/main.py` v1.2.0 — Postgres-aware helpers `_get_cases`, `_get_evidence`, `_get_findings`, `_add_case`, `_add_evidence`, `_add_finding`, `_update_case_risk`, `_db_available` banner; `ensure_case` → `_add_case`, `make_envelope` eid now uses `_get_evidence()` total for uniqueness across restarts; all endpoints (`list_cases`, `post_evidence`, `run`, `timeline`, `graph`, `risk`, `list_evidence`, `list_findings`, `build_report_html`) now read from PG when available, fallback to memory; `GET /health` now returns `db:true/false` + `postgres:true/false`, version 1.2.0
+
+#### Verified
+- Host `pytest` 35/35 still passing (fallback in-memory, `USE_DB` not required)
+- Docker :8000 — `[db] Connected to db:5432/jockydb — tables ready` (twice on startup), `GET /health` → `db:true`; live case 90: `POST /api/run` 2 evidence → `restart backend` → `GET /api/evidence?case_id=90` still 2 (persisted), `GET /api/cases` count 2; `GET /health` version 1.2.0
 
 ### 2026-08-28 — Report Generation
 
