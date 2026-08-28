@@ -6,6 +6,19 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/) and [Sem
 
 ## [Unreleased]
 
+## 2026-08-28 — YARA Binary — hash ≠ detection (Point 1+2) via yara 4.5.2
+
+### Added
+- `backend/Dockerfile` — `yara` apt (`yara 4.5.2`) alongside pango/cairo
+- `docker-compose.yml` — `backend` volumes `yara:/app/yara:ro` + `testdata:/app/testdata:ro` (rules at `/app/yara/rules.yar`)
+- `backend/app/main.py` — `yara_scan_content(content) -> (hits, yara_used)` helper (tries `yara /app/yara/rules.yar` binary via `subprocess` `4.5.2`, fallback string `JOCKY_DEMO_MARKER/BYOVD_RTCore64/hollowed` for host); `_yara_rules_path()` probes `/app/yara/rules.yar` etc; `YaraScanRequest` + `PolyDemoRequest`, endpoints `POST /api/yara/scan` (sha256 + hits + yara_used), `GET /api/yara/status` (yara_available, test_hits), `POST /api/yara/polymorphic-demo` (hash≠detection: 3 seeds→ distinct hashes but same_yara_cluster), `POST /api/detect` now `yara_used` flag + health `yara:true`
+- `frontend/src/App.tsx` — YARA panel: `GET /api/yara/status` badge `YARA ✅ binary` vs fallback, `Run YARA Poly Demo` button → `POST /api/yara/polymorphic-demo` (shows 3 seeds sha12 hits + yara_used + distinct_hashes/same_yara_cluster), links to `/api/yara/status` + `/api/docs`
+- `tests/test_yara.py` (6) — yara status, scan fallback, BYOVD, polymorphic hash≠detection, detect yara_used, compile IR yara hit
+
+### Verified
+- Host `pytest` 41/41 (fallback string, yara binary not required on host)
+- Docker :8000 — `GET /health` `yara:true yara_rules:/app/yara/rules.yar`, `GET /api/yara/status` `yara_binary_used true`, `POST /api/yara/polymorphic-demo` 3 distinct SHA256 (`3df…/b6d5…/d450…`) → `same_yara_cluster true` (hash≠detection)
+
 ## 2026-08-28 — Postgres Persistence — evidence/cases/findings survive restart
 
 ### Added
