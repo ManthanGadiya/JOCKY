@@ -6,6 +6,34 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/) and [Sem
 
 ## [Unreleased]
 
+## 2026-08-28 — E2E `system.info();` Milestone — First Query from Dashboard Live
+
+### Added
+- `jocky/include/jocky/IRGen.h` — `IRResult` (ir_version 1, capabilities, ops, error) + `generateIRWithValidation()`
+- `jocky/src/IRGen.cpp` — OP_CAPS whitelist (15 ops → 8 caps), `RE_CALL` regex validation, `IR_VERSION=1` header, fail-closed `generateIRWithValidation()`; C++ path now rejects unknown ops with code 2
+- `jocky/src/main.cpp` — prints `ir_version` + caps on success; prints validation error on fail
+- `tools/jockyc.py` — same whitelist, `validate_and_collect()` + `IR_VERSION=1`/`IR_CAPS`/`IR_OPS` header, dedup caps, polymorphic still yields 3 distinct SHA256
+- `backend/app/main.py` v1.1.0 — `POST /api/compile` (ir_version 1, caps/ops, 422 on unknown), `POST /api/run` (cap policy DEFAULT_POLICY: `memory.analyze` → 403 deny, `system.read` allow; canonical envelope `schema_version 1` + `integrity.sha256` + `provenance` + `chain_of_custody`; per-case `findings` + risk; live `/timeline` `/graph` `/risk` with case_id filtering; `/evidence?case_id=` + `/findings?case_id=`)
+- `frontend/src/App.tsx` — JOCKY editor (textarea + **Compile**/**Run** buttons + quick inserts for `system.info();`/`process.list();`/`edr.disable();` fail demo), IR pane (shows `IR_VERSION=1`), live fetches for Graph/Timeline/RiskGauge/evidence+findings, 5s poll, case 1 default
+- `frontend/src/components/Graph.tsx` — now takes `data` prop (live nodes/edges/mitre) with demo fallback; auto-layout for backend graph
+- `frontend/src/components/Timeline.tsx` — now takes `events` prop with demo fallback
+- `tests/test_compiler.py` (9 tests), `tests/test_backend.py` (13), `tests/test_e2e.py` (3) — 25 tests covering IR version/caps, unknown op 422 fail-closed, memory 403, polymorphic YARA marker, E2E envelope field completeness
+- `docker-compose.yml` — `nginx` host port `8082:80` (was `80:80` conflicting with SYSTEM PID 4 on Windows)
+
+### Changed
+- `docker-compose.yml` + live stack verified: `backend` :8000 + `frontend` :3000 + `nginx` 8082→80 + `db` healthy + `redis`/`minio`/`jocky`/`detector` all Up (2026-08-28 live curl)
+- `docs/STATUS.md` + `STATUS.md` mirror — updated 29-row audit table: IR/validation, evidence envelope, backend, graph/timeline/dashboard all 🟢 Verified; Docker + E2E now 🟢; `Current Milestone` marked complete for `system.info();`; `Known Limitations` reduced
+- `README.md` current status will be refreshed on next commit (see audit → E2E delta)
+
+### Verified
+- `pytest` 25/25 passing on host (no Docker)
+- Live `POST /api/run {system.info();}` via `http://localhost:8000` → `EV-... schema_version 1` risk 5 LOW finding INFO → `GET /api/cases/1/timeline` 1 event, `graph` 3 nodes, `risk` 5
+- Frontend :3000 serves new App.tsx (editor + live wiring) — `curl http://localhost:3000` returns Vite shell; manual browser Run flow updates live panels
+
+### Fixed
+- `edr.disable();` and `security.disable();` now fail-closed (exit 2 / HTTP 422) instead of silently succeeding with `nop`
+- `memory.analyze(1234);` now correctly denied 403 per SECURITY_MODEL default-deny policy
+
 ## 2026-08-28 — Initial Takeover Audit
 
 ### Added

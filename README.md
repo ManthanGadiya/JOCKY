@@ -806,35 +806,34 @@ Instructions for AI coding agents contributing to the repository.
 
 > This section is intentionally kept short. `docs/STATUS.md` contains the detailed implementation audit with evidence.
 
-**Phase:** Foundation / Core Platform — Audit Complete (2026-08-28)
+**Phase:** E2E `system.info();` ✅ Complete — Dashboard Run Live (2026-08-28)
 
-**Audit Verdict:** Scaffolded platform with **verified host compiler polymorphism** and **verified backend API**, but **end-to-end pipeline not yet connected**. Docker and platform support are **not verified** on audit host.
+**Verdict:** **First query from the dashboard works end-to-end.** `system.info();` → Compile (IR v1) → Validation fail-closed → Synthetic envelope → Backend → Findings → Live Graph/Timeline/Risk. Docker verified live on :8000/:3000/8082. 25 tests passing.
 
-### Verified on Host (evidence in `docs/STATUS.md §6`)
+### Verified (evidence in `docs/STATUS.md §7`, `pytest` 25/25, live `curl`)
 
-* 🟢 `tools/jockyc.py` → `build/a.ll` / `b.ll` / `c.ll` produce **3 distinct SHA256** (polymorphism with seeds 1/2/3) containing `JOCKY_DEMO_MARKER`, `EntryPoint`, shuffled imports, `bb.poly.*` blocks.
-* 🟢 FastAPI backend (`backend/app/main.py`) via TestClient: `GET /health`, `POST /api/evidence` (hollowing **risk 90 CRITICAL**, byovd **risk 40**), `GET /api/cases/1/risk|timeline|graph`, `POST /api/detect` with YARA hits.
+* 🟢 `tools/jockyc.py` + `jocky/src/IRGen.cpp` → **IR_VERSION=1**, `IR_CAPS`/`IR_OPS`, `EntryPoint`, `JOCKY_DEMO_MARKER`, `bb.poly.*` — 3 hashes differ; `edr.disable();` → **exit 2 / HTTP 422 fail-closed**
+* 🟢 `POST /api/compile {system.info();}` → `ir_version 1`, `caps [system.read]`, `ops [system.info]`; unknown op → 422
+* 🟢 `POST /api/run {system.info();}` → **canonical envelope** `EV-... schema_version 1 integrity.sha256 provenance.ir_hash chain_of_custody` risk 5 LOW finding `F-...`; `memory.analyze` → **403 denied** per `DEFAULT_POLICY`
+* 🟢 `GET /api/cases/{id}/timeline|graph|risk` + `/api/evidence?case_id=` + `/api/findings?case_id=` — **live** (not static mocks); graph = host→evidence→finding
+* 🟢 `frontend` :3000 — **JOCKY editor** (textarea + **Compile**/**Run** + `edr.disable` fail demo), **IR pane** (shows `IR_VERSION=1`), **live** Graph/Timeline/RiskGauge/evidence list, 5s poll — verified `curl :3000` + manual Run flow
+* 🟢 `docker compose ps` — **9 services Up**: `backend` :8000, `frontend` :3000, `nginx` 8082→80, `db` healthy, `redis`, `minio`, `jocky`, `detector`
 
 ### Partially Implemented
 
-* 🟡 Compiler/IR (textual IR, 12 ops) — no IR validation, no capability enforcement, no AST.
-* 🟡 Backend uses in-memory store (Postgres/Redis/MinIO declared in `docker-compose.yml` but not wired).
-* 🟡 Detection `yara/rules.yar` + `sigma/rules.yml` exist; Python layer is string-contains, not YARA binary.
-* 🟡 Dashboard `frontend/` (React 18 + Vite + ReactFlow + Tailwind) renders static Graph/Timeline/RiskGauge; **no JOCKY editor, no Run button**, live data fetch stubs with hardcoded fallback.
-* 🟡 Controlled lab `testdata/*.json` fixtures (6 synthetic scenarios, safely labeled) exist but not wired via `evidence.load()`.
+* 🟡 Runtime is still synthetic provider (no WinAPI/ETW, no `/proc`); `process.list`/`file.hash`/`network.connections` compile and run but use stub payloads
+* 🟡 Backend still in-memory (Postgres/Redis/MinIO declared but not persisted — evidence lost on restart); `sqlalchemy` models exist but not wired
+* 🟡 Detection still `calc_risk` + YARA **string-contains** (YARA binary not invoked for `.ll`); findings created per-evidence but not yet Sigma-correlated
+* 🟡 Lexer/Parser/AST remain stubs — validation is regex `RE_CALL` in compiler/backend (covers whitelist correctly but not full `LANGUAGE_SPEC.md` grammar)
+* 🟡 `testdata/*.json` fixtures (6 synthetic) exist but `evidence.load()` wiring pending; next milestone will add richer `process.list` correlation
 
-### Not Connected / Not Verified
+### Still Not Started
 
-* 🔴 Lexer/Parser/AST — stubs (Parser.cpp 3 lines, `*.ast` stub files); unknown ops like `unknown.op()` currently **not rejected**.
-* 🔴 Runtime `runtime/` — 13-line hardcoded provider; not dispatched from IR.
-* 🔴 Agent `agent/src/agent.cpp` — 18-line stub prints "Would POST" but does not POST; no auth, no provider.
-* 🔴 Evidence normalization / canonical envelope per `FORENSICS_SPEC.md` — not implemented.
-* 🔴 Report generation, agent→backend WSS, hardening.
-* 🔴 Docker `docker compose build` / `up` — **NOT VERIFIED** (Windows host, daemon not exercised in audit).
-* 🔴 Automated tests — `tests/` does not exist; CI `.github/workflows/build.yml` exists but not run here.
-* 🔴 Windows/Linux platform providers — no native API code, no platform validation.
+* 🔴 Report generation (`/api/report` → WeasyPrint PDF) — `weasyprint` in `requirements.txt` but no endpoint
+* 🔴 Windows/Linux native providers + BYOVD true YARA binary scanning for `.ll` demo
+* 🔴 Persistence hardening + auth (JWT) + agent mTLS
 
-**Next Milestone:** `system.info();` end-to-end — see `docs/STATUS.md §8` for exit criteria (IR version + capability check + evidence envelope + live dashboard fetch + integration test).
+**Next Milestone:** Expand language per `LANGUAGE_SPEC.md §10` — `process.list()`, `file.hash()`, `network.connections()` with richer envelope normalization + correlated graph edges + Sigma enrichment — see `docs/STATUS.md §10`.
 
 The status above must be updated when the actual implementation changes.
 

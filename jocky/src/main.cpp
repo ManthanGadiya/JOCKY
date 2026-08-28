@@ -33,8 +33,12 @@ int main(int argc, char** argv){
   jocky::IRGenOptions opts; opts.polymorphic=poly; opts.seed=seed; opts.output=output;
   std::string ir;
   int rc = jocky::generateIR(input, opts, &ir);
-  if(rc!=0){ std::cerr << "IR generation failed\n"; return rc; }
+  if(rc!=0){ std::cerr << "IR generation failed: " << ir << "\n"; return rc; }
   std::cout << ir;
-  std::cerr << "\n[ jockyc: wrote " << output << " (" << ir.size() << " bytes) poly=" << poly << " seed=" << (seed?std::to_string(seed):"random") << " ]\n";
+  auto jsrc = [&]{ std::ifstream f(input); return std::string((std::istreambuf_iterator<char>(f)),{}); }();
+  auto res = jocky::generateIRWithValidation(jsrc, seed?seed:0x1234, poly);
+  std::cerr << "\n[ jockyc: wrote " << output << " (" << ir.size() << " bytes) poly=" << poly << " seed=" << (seed?std::to_string(seed):"random") << " ir_version=" << res.ir_version << " caps=";
+  for(auto &c: res.capabilities) std::cerr << c << " ";
+  std::cerr << "]\n";
   return 0;
 }

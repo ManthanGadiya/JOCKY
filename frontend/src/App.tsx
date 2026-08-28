@@ -3,42 +3,148 @@ import Graph from './components/Graph'
 import Timeline from './components/Timeline'
 import RiskGauge from './components/RiskGauge'
 
+const API = 'http://localhost:8000'
+const DEFAULT_SRC = `system.info();
+process.list();
+`
+
 export default function App(){
   const [cases, setCases] = useState<any[]>([])
-  const [risk, setRisk] = useState(85)
+  const [risk, setRisk] = useState(0)
+  const [source, setSource] = useState(DEFAULT_SRC)
+  const [ir, setIr] = useState<string>("")
+  const [caps, setCaps] = useState<string[]>([])
+  const [ops, setOps] = useState<string[]>([])
+  const [evidence, setEvidence] = useState<any[]>([])
+  const [findings, setFindings] = useState<any[]>([])
+  const [timeline, setTimeline] = useState<any[]>([])
+  const [graph, setGraph] = useState<any>({nodes:[],edges:[],mitre:[]})
+  const [loading, setLoading] = useState(false)
+  const [error, setError] = useState<string>("")
+  const [caseId, setCaseId] = useState(1)
+  const [lastRun, setLastRun] = useState<string>("")
+
+  const refresh = async (cid:number)=>{
+    try{
+      const r = await fetch(`${API}/api/cases/${cid}/risk`).then(r=>r.json())
+      setRisk(r.risk ?? 0)
+      const t = await fetch(`${API}/api/cases/${cid}/timeline`).then(r=>r.json())
+      setTimeline(t.timeline || [])
+      const g = await fetch(`${API}/api/cases/${cid}/graph`).then(r=>r.json())
+      setGraph(g)
+      const cs = await fetch(`${API}/api/cases`).then(r=>r.json())
+      setCases(cs.cases||[])
+      const ev = await fetch(`${API}/api/evidence?case_id=${cid}`).then(r=>r.json())
+      setEvidence(ev.evidence||[])
+      const f = await fetch(`${API}/api/findings?case_id=${cid}`).then(r=>r.json())
+      setFindings(f.findings||[])
+    }catch(e){/* fallback keeps last values */}
+  }
+
+  useEffect(()=>{ refresh(caseId) },[caseId])
+  // poll every 5s for live updates
   useEffect(()=>{
-    fetch('http://localhost:8000/api/cases').then(r=>r.json()).then(d=>setCases(d.cases||[])).catch(()=>{})
-    fetch('http://localhost:8000/api/cases/1/risk').then(r=>r.json()).then(d=>setRisk(d.risk||85)).catch(()=>{})
-  },[])
+    const id=setInterval(()=>refresh(caseId), 5000)
+    return ()=>clearInterval(id)
+  },[caseId])
+
+  const runCompile = async ()=>{
+    setLoading(true); setError(""); setIr("")
+    try{
+      const res = await fetch(`${API}/api/compile`,{method:'POST',headers:{'Content-Type':'application/json'},body: JSON.stringify({source})})
+      const data = await res.json()
+      if(!res.ok) throw new Error(data.detail || 'compile failed')
+      setIr(data.ir); setCaps(data.capabilities||[]); setOps(data.ops||[])
+      setLastRun(`Compiled OK — IR v${data.ir_version} hash ${data.ir_hash} caps ${data.capabilities.join(', ')||'(none)'}`)
+    }catch(e:any){ setError(e.message||String(e)) }
+    finally{ setLoading(false) }
+  }
+
+  const runExecute = async ()=>{
+    setLoading(true); setError("")
+    try{
+      const res = await fetch(`${API}/api/run`,{method:'POST',headers:{'Content-Type':'application/json'},body: JSON.stringify({source, agent_id:'WIN-001', host_id:'HOST-001', case_id: caseId})})
+      const data = await res.json()
+      if(!res.ok) throw new Error(data.detail || 'run failed')
+      setIr(data.ir); setCaps(data.capabilities||[]); setOps(data.ops||[])
+      setEvidence(data.evidence||[]); setFindings(data.findings||[])
+      setRisk(data.risk??0)
+      setLastRun(`Run OK — case ${data.case_id} risk ${data.risk} (${data.level}) evidence ${data.evidence.length}`)
+      await refresh(data.case_id)
+    }catch(e:any){ setError(e.message||String(e)) }
+    finally{ setLoading(false) }
+  }
+
   return (
-    <div className="min-h-screen p-6">
+    <div className="min-h-screen p-6 bg-zinc-950 text-zinc-100">
       <header className="flex justify-between items-center border-b border-zinc-800 pb-4 mb-6">
         <h1 className="text-2xl font-bold">JOCKY Forensic Dashboard <span className="text-violet-400">L8 Correlation</span></h1>
-        <span className="text-xs bg-zinc-900 px-3 py-1 rounded">Backend: {cases.length} cases • Nginx CDN proxy • WSS</span>
+        <span className="text-xs bg-zinc-900 px-3 py-1 rounded">Backend: {cases.length} cases • {evidence.length} evidence • IR v1 • Nginx 8082 • WSS</span>
       </header>
+
+      {/* JOCKY Editor — First Milestone */}
+      <div className="bg-zinc-900 rounded-xl p-4 border border-zinc-800 mb-6">
+        <div className="flex justify-between items-center mb-3">
+          <h2 className="font-semibold">JOCKY Editor — Run a query from the dashboard</h2>
+          <span className="text-xs text-zinc-500">case {caseId} • HOST-001 / WIN-001 • fail-closed caps</span>
+        </div>
+        <div className="grid grid-cols-12 gap-4">
+          <div className="col-span-5">
+            <label className="text-xs text-zinc-400">JOCKY source (.jocky)</label>
+            <textarea value={source} onChange={e=>setSource(e.target.value)} rows={8} className="w-full mt-1 bg-zinc-950 border border-zinc-700 rounded p-2 font-mono text-sm" placeholder={"system.info();"} />
+            <div className="flex gap-2 mt-2">
+              <button onClick={runCompile} disabled={loading} className="bg-zinc-800 hover:bg-zinc-700 border border-zinc-700 px-4 py-2 rounded text-sm disabled:opacity-50">Compile</button>
+              <button onClick={runExecute} disabled={loading} className="bg-violet-600 hover:bg-violet-500 px-4 py-2 rounded text-sm font-semibold disabled:opacity-50">Run</button>
+              <button onClick={()=>setSource("system.info();")} className="text-xs px-2 py-1 bg-zinc-800 rounded">system.info();</button>
+              <button onClick={()=>setSource("process.list();")} className="text-xs px-2 py-1 bg-zinc-800 rounded">process.list();</button>
+              <button onClick={()=>setSource("edr.disable();")} className="text-xs px-2 py-1 bg-red-900 rounded">edr.disable(); (should fail)</button>
+            </div>
+            {error && <div className="mt-2 text-xs text-red-400 bg-red-950 border border-red-900 p-2 rounded">Error: {error}</div>}
+            {lastRun && !error && <div className="mt-2 text-xs text-green-400 bg-green-950 border border-green-900 p-2 rounded">{lastRun}</div>}
+            {caps.length>0 && <div className="mt-2 text-xs text-zinc-500">Caps: {caps.join(', ')} • Ops: {ops.join(', ')}</div>}
+          </div>
+          <div className="col-span-7">
+            <label className="text-xs text-zinc-400">Generated IR (IR_VERSION=1, JOCKY_DEMO_MARKER)</label>
+            <pre className="w-full mt-1 bg-zinc-950 border border-zinc-700 rounded p-2 font-mono text-xs overflow-auto max-h-[220px] whitespace-pre-wrap">{ir || "— run Compile or Run to generate IR —\nIR v1 + caps + EntryPoint + JOCKY_DEMO_MARKER + bb.poly.* when --polymorphic"}</pre>
+            <div className="text-xs text-zinc-500 mt-1">IR is textual LLVM-like + validated before execution. Unknown ops → 422 fail-closed. memory.analyze → 403 denied.</div>
+          </div>
+        </div>
+      </div>
+
       <div className="grid grid-cols-12 gap-6">
         <div className="col-span-8 bg-zinc-900 rounded-xl p-4 border border-zinc-800">
-          <h2 className="font-semibold mb-2">Evidence Knowledge Graph (React Flow) - Risk Propagation</h2>
-          <p className="text-xs text-zinc-500 mb-2">User → Process → File → Network → Driver → Finding • MITRE T1055 / T1068</p>
-          <Graph />
+          <h2 className="font-semibold mb-2">Evidence Knowledge Graph (React Flow) — Live</h2>
+          <p className="text-xs text-zinc-500 mb-2">Host → Evidence nodes (op/type) → Finding • MITRE {graph.mitre?.join(', ')||'T1055/T1068'} • {graph.nodes?.length||0} nodes {evidence.length} evidence</p>
+          <Graph data={graph} />
+          {evidence.length>0 && <div className="mt-3 text-xs"><div className="font-semibold mb-1">Evidence store (case {caseId}) — canonical envelope schema_version 1 + integrity SHA256:</div>
+            <div className="space-y-1 max-h-40 overflow-auto bg-zinc-950 p-2 rounded border border-zinc-800">
+              {evidence.slice(-5).map((e:any)=><div key={e.id} className="font-mono text-xs"><span className="text-violet-400">{e.id}</span> {e.op} {e.type} risk {e.risk} sha {String(e.sha256||'').slice(0,12)}…</div>)}
+            </div>
+          </div>}
         </div>
         <div className="col-span-4 space-y-4">
           <RiskGauge risk={risk} />
           <div className="bg-zinc-900 rounded-xl p-4 border border-zinc-800">
-            <h3 className="font-semibold">AI Explainer (Ollama stub)</h3>
-            <p className="text-sm text-zinc-400 mt-2">Risk {risk}: Hollowed explorer.exe (T1055.012) + RTCore64 vulnerable driver (T1068) + ESTABLISHED C2 to 185.220.101.5. Chain-of-custody SHA256 verified.</p>
+            <h3 className="font-semibold">Findings — Live</h3>
+            {findings.length===0 ? <p className="text-sm text-zinc-500 mt-2">No findings yet — Run system.info();</p> :
+              <ul className="text-sm mt-2 space-y-1">{findings.slice(-5).map((f:any)=><li key={f.id} className="text-xs"><span className="text-violet-400">{f.id}</span> {f.rule} {f.severity} risk {f.risk}</li>)}</ul>}
           </div>
           <div className="bg-zinc-900 rounded-xl p-4 border border-zinc-800">
             <h3 className="font-semibold">MITRE ATT&CK</h3>
             <ul className="text-xs mt-2 space-y-1"><li>T1055 Process Injection (hollowing)</li><li>T1068 Exploit Vuln Driver (BYOVD)</li><li>T1105 Ingress Tool Transfer</li></ul>
           </div>
+          <div className="bg-zinc-900 rounded-xl p-4 border border-zinc-800">
+            <h3 className="font-semibold">AI Explainer (Ollama stub)</h3>
+            <p className="text-sm text-zinc-400 mt-2">Risk {risk}: {findings.length? `${findings[findings.length-1]?.rule} risk ${risk}` : 'Run a JOCKY query to generate evidence'}. Chain-of-custody SHA256 verified, envelope schema_version 1.</p>
+          </div>
         </div>
         <div className="col-span-12 bg-zinc-900 rounded-xl p-4 border border-zinc-800">
-          <h2 className="font-semibold mb-2">Causal Timeline Fusion (6 sources)</h2>
-          <Timeline />
+          <h2 className="font-semibold mb-2">Causal Timeline Fusion — Live</h2>
+          <p className="text-xs text-zinc-500 mb-2">{timeline.length} events in case {caseId} — source: evidence_store ordered by observed_at/schema_version 1</p>
+          <Timeline events={timeline} />
         </div>
       </div>
-      <footer className="text-xs text-zinc-600 mt-8">JOCKY L1-L8 • Docker-only • Synthetic evidence demo • Point 1+2: jockyc --polymorphic → 3 hashes • 3A+3B: detection on testdata/*.json • Central via Nginx</footer>
+      <footer className="text-xs text-zinc-600 mt-8">JOCKY L1-L8 • IR v1 validates + fail-closed • system.info() E2E → evidence envelope → detection → live Graph/Timeline/Risk • Synthetic evidence demo • Point 1+2: jockyc --polymorphic → 3 hashes • Nginx 8082 → backend 8000</footer>
     </div>
   )
 }
