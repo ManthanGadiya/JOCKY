@@ -1,4 +1,4 @@
-from fastapi import FastAPI, WebSocket, HTTPException
+from fastapi import FastAPI, WebSocket, HTTPException, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
@@ -49,6 +49,22 @@ def _cache_status():
         except Exception:
             return {"redis_available": False}
     return {"redis_available": False}
+
+# --- Auth per SECURITY_MODEL §19-20 ---
+try:
+    from .auth import get_current_user, create_token as _create_token, verify_token as _verify_token, AUTH_REQUIRED, JWT_SECRET
+except ImportError:
+    try:
+        from backend.app.auth import get_current_user, create_token as _create_token, verify_token as _verify_token, AUTH_REQUIRED, JWT_SECRET
+    except Exception:
+        def get_current_user(authorization=None, x_api_key=None):  # type: ignore
+            return {"sub": "analyst", "role": "investigator"}
+        def _create_token(sub="analyst", role="investigator"):  # type: ignore
+            return "dummy"
+        def _verify_token(token):  # type: ignore
+            return {"sub": "analyst"}
+        AUTH_REQUIRED = False
+        JWT_SECRET = "change-me"
 
 def _db_available() -> bool:
     return _db is not None and getattr(_db, "is_db_available", lambda: False)()
@@ -1013,10 +1029,37 @@ def post_report(req: ReportRequest):
         return StreamingResponse(io.BytesIO(html.encode()), media_type="text/html",
             headers={"X-Report-Fallback": str(e)[:200]})
 
+# --- Auth per SECURITY_MODEL §19-20 ---
+class AuthRequest(BaseModel):
+    username: str
+    password: Optional[str] = None
+
+class AuthResponse(BaseModel):
+    access_token: str
+    token_type: str = "bearer"
+    expires_in: int = 3600
+
+@app.post("/api/auth/login", response_model=AuthResponse)
+def auth_login(req: AuthRequest):
+    # Demo auth: any username with any password gives token (lab isolation per SECURITY §47)
+    # In production would verify against DB/LDAP
+    if not req.username:
+        raise HTTPException(status_code=400, detail="username required")
+    token = _create_token(sub=req.username, role="investigator")
+    return {"access_token": token, "token_type": "bearer", "expires_in": 3600}
+
+@app.get("/api/auth/me")
+def auth_me(user: Dict[str, Any] = Depends(get_current_user)):
+    return {"user": user, "auth_required": AUTH_REQUIRED}
+
+@app.get("/api/auth/status")
+def auth_status():
+    return {"auth_required": AUTH_REQUIRED, "jwt_alg": "HS256", "login": "POST /api/auth/login {username}"}
+
 # --- Storage/Cache introspection per ARCHITECTURE §11 + Report history per FORENSICS §64 ---
 @app.get("/api/storage/status")
 def storage_status():
-    return {"storage": _storage_status(), "cache": _cache_status(), "health": {"minio": _storage_status().get("minio_available", False), "redis": _cache_status().get("redis_available", False)}}
+    return {"storage": _storage_status(), "cache": _cache_status(), "health": {"minio": _storage_status().get("minio_available", False), "redis": _cache_status().get("redis_available", False)}, "auth_required": AUTH_REQUIRED}
 
 @app.get("/api/cases/{case_id}/reports")
 def list_reports(case_id: int):
