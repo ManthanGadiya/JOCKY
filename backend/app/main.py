@@ -977,10 +977,32 @@ def post_report(req: ReportRequest):
         return StreamingResponse(io.BytesIO(html.encode()), media_type="text/html",
             headers={"X-Report-Fallback": str(e)[:200]})
 
-# --- Storage/Cache introspection per ARCHITECTURE §11 ---
+# --- Storage/Cache introspection per ARCHITECTURE §11 + Report history per FORENSICS §64 ---
 @app.get("/api/storage/status")
 def storage_status():
     return {"storage": _storage_status(), "cache": _cache_status(), "health": {"minio": _storage_status().get("minio_available", False), "redis": _cache_status().get("redis_available", False)}}
+
+@app.get("/api/cases/{case_id}/reports")
+def list_reports(case_id: int):
+    """List versioned report history per FORENSICS_SPEC §64 provenance + ARCHITECTURE §11 artifact store."""
+    if _storage and hasattr(_storage, "list_reports"):
+        try:
+            lst = _storage.list_reports(case_id)
+            return {"case_id": case_id, "reports": lst, "count": len(lst)}
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=str(e))
+    return {"case_id": case_id, "reports": [], "count": 0}
+
+@app.get("/api/cases/{case_id}/reports/{report_key:path}")
+def get_versioned_report(case_id: int, report_key: str):
+    # report_key is file name like JOCKY_case_1_report_....pdf — resolve via storage
+    if _storage:
+        full_key = f"case-{case_id}/{report_key}" if not report_key.startswith("case-") else report_key
+        data = _storage.get_bytes(_storage.BUCKET_REPORTS, full_key)
+        if data:
+            return StreamingResponse(io.BytesIO(data), media_type="application/pdf",
+                headers={"Content-Disposition": f'attachment; filename=\"{report_key}\"'})
+    raise HTTPException(status_code=404, detail="Report version not found")
 
 @app.post("/api/artifacts/upload")
 def artifact_upload(payload: Dict[str, Any]):
