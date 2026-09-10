@@ -49,19 +49,21 @@ Build a safe, reproducible, defensive forensic investigation platform around the
 | Forensic adapters       | 🟢 Verified     | `IProcessProvider/IFileProvider/INetworkProvider` per DESIGN §23 — both adapters return normalized schema (FORENSICS §67); `POST /api/run?platform=windows|linux` (10 tests) |
 | Evidence model          | 🟢 Verified     | Canonical envelope schema_version 1 + integrity SHA256 + provenance (tested, E2E) |
 | Agent                   | 🟢 Verified     | **Real POST via nginx** `agent/agent.py` → `http://nginx:80` → backend:8000 — `GET /health` via nginx, `POST /api/evidence` per fixture, `POST /api/run` JOCKY sweep + fail-closed 422/403 via nginx (8 tests) |
-| Backend                 | 🟢 Verified     | PG persistence + compile/run + report + yara scan/polymorphic-demo + /evidence|findings (41 tests, health `db:true yara:true`) |
+| Backend                 | 🟢 Verified     | PG persistence + compile/run + report + yara scan/polymorphic-demo + /evidence|findings + **MinIO+Redis** (`/health` `minio`/`redis`, `/api/storage/status`, `/api/artifacts`) (8 storage tests) |
 | Detection engine        | 🟢 Verified     | **YARA 5 rules** (`JOCKY_DEMO_MARKER/BYOVD_RTCore64/Process_Hollowing` + `File_Suspicious_PE`/`Network_C2_Beacon`) + **Sigma 2 rules** (`jocky-001 T1055`, `jocky-002 T1068`) + **Behavioral** (`detection_engine.py` `sigma_scan()`/`behavioral_scan()`/`detect()` with mitre/severity/confidence per FORENSICS §31) — 11 tests |
 | Investigation graph     | 🟢 Verified     | Star host→evidence + process→file/net edges, live ReactFlow |
 | Timeline                | 🟢 Verified     | Ordered by observed_at |
 | Dashboard               | 🟢 Verified     | Editor + live Graph/Timeline/Risk + findings + 📄 Report PDF + **YARA panel (poly demo: 3 hashes → 1 cluster)** (live :3000) |
-| Report generation       | 🟢 Verified     | PDF via WeasyPrint pydyf 0.11, live 20KB verified |
-| Docker environment      | 🟢 Verified     | 9 Up: backend (pango + postgres + **yara 4.5.2** + rules volume) :8000, frontend (YARA panel) :3000, nginx 8082, db healthy pgdata persisting |
-| Database                | 🟢 Verified     | Postgres 15 persistence — survive restart (case 90: 2→restart→2) |
+| Report generation       | 🟢 Verified     | PDF via WeasyPrint pydyf 0.11 + **MinIO** `jocky-reports` + **Redis cache** TTL 300s + `X-Report-Cached` — live 20KB verified |
+| Docker environment      | 🟢 Verified     | 9 Up: backend (pango + postgres + **yara 4.5.2** + **minio+redis** verified in `/health`) :8000, frontend :3000, nginx 8082, db healthy `pgdata+miniodata` persisting |
+| Database                | 🟢 Verified     | Postgres 15 persistence — survive restart (case 90: 2→restart→2) + MinIO `jocky-reports`/`jocky-evidence` buckets |
+| Cache / Queue           | 🟢 Verified     | **Redis** `cache.py` (`cache_get/set/invalidate`, TTL, mem fallback, `redis_url` health) — 8 tests |
+| Storage                 | 🟢 Verified     | **MinIO** `storage.py` (`put_report`/`get_report`/`put_evidence_artifact`/`put_bytes`/`get_bytes`, bucket auto-create, mem fallback) — 8 tests |
 | Windows support         | 🟢 Verified     | **Synthetic Windows** `Windows*Provider` (WinAPI-style paths `C:\Windows\...`, `uid`→`SYSTEM`, `command_line`) — same Sigma T1055 preserved — verified via `platform=windows` contract tests |
 | Linux support           | 🟢 Verified     | **Synthetic Linux** `Linux*Provider` (`/proc`-style `/usr/bin/...`, `uid`, `inode`, `lsmod`) — same normalized contract — verified via `platform=linux` — 10 tests |
 | Controlled laboratory   | 🟢 Verified     | 6 fixtures + live poly demo (3 IRs same YARA cluster) + full-sweep cases + report |
 | End-to-end workflow     | 🟢 Verified     | Full sweep → envelope → YARA → Timeline/Graph/Risk→Report persists (Point 1+2) |
-| Automated tests         | 🟢 Verified     | **82 tests** (compiler 9, backend 13, e2e 3, forensic 6, report 4, yara 6, agent 8, grammar 12, platform 10, detection 11) all passing |
+| Automated tests         | 🟢 Verified     | **90 tests** (compiler 9, backend 13, e2e 3, forensic 6, report 4, yara 6, agent 8, grammar 12, platform 10, detection 11, storage 8) all passing |
 
 ---
 
@@ -160,9 +162,9 @@ Every stage must eventually be independently testable.
 
 ---
 
-# 7. Currently Verified (2026-08-28 — Agent via Nginx + Postgres Persistence)
+# 7. Currently Verified (2026-08-28 — Full Sweep + Harden & Persist)
 
-### Verified on Host + Docker (evidence logged, 49 tests + live PG + YARA + Agent via nginx)
+### Verified on Host + Docker (evidence logged, 90 tests + live PG + YARA + Agent via nginx + Platform + Detection + MinIO/Redis)
 
 * **Host compiler** `tools/jockyc.py` → IR_VERSION=1 — 3 hashes differ + `edr.disable()` → exit 2 fail-closed (9 tests)
 * **Backend API** `backend/app/main.py` v1.2.0 (enriched + PG + YARA) via TestClient **and live on :8000**:
@@ -178,14 +180,15 @@ Every stage must eventually be independently testable.
 * **Grammar-wired compiler** `tools/jocky_lexer.py` — real `lex()` per `grammar/jocky.g4` tokens + `parse_member_calls()` per g4 `MemberCall`, `validate_and_collect()` returns line:col errors, used by both `tools/jockyc.py` + `backend/app/main.py` (single source; replaces `RE_CALL` regex), `.tokens` now real dump + `.ast` with calls/tokens, 12 new `test_compiler_grammar` tests (keywords, strings, comments, syntax errors, g4 coverage, backend same lexer)
 * **Platform providers** `backend/app/providers/` per ARCHITECTURE §8 + DESIGN §22 — `base.py` `ISystem/IProcess/IFile/INetwork/IDriverProvider`, `windows.py` (WinAPI synthetic `C:\Windows\...`), `linux.py` (`/proc` synthetic `uid/inode/lsmod`), `factory.py` `get_providers(platform)` + `detect_platform()` + `platform_from_request()`; `backend/app/main.py` `make_envelope(..., platform)` dispatches via `_platform_provider_payload()`, `RunRequest.platform` field, same JOCKY → same MITRE `T1105/T1055` but different `platform` + path/uid per FORENSICS §67; 10 `test_platform_providers` contract tests
 * **Detection depth** `backend/app/detection_engine.py` per ARCHITECTURE §13 + FORENSICS §31 — `load_sigma_rules()` (yaml + fallback), `sigma_scan()` (jocky-001 ppid anomaly, jocky-002 BYOVD), `behavioral_scan()` (13 weights: ppid/hollowed/unbacked/reflective/vuln/yara/sigma/C2), `detect()` + `risk_for_payload()`; `yara/rules.yar` expanded to 5 rules (`File_Suspicious_PE` T1105, `Network_C2_Beacon` T1071) + `backend/app/main.py` fallback strings for new rules; `backend/requirements.txt` adds `pyyaml`; 11 `test_detection_depth` tests
-* **Tests** 82/82: 9+13+3+6+4+6+8+12+10+11 (compiler/backend/e2e/forensic/report/yara/agent/grammar/platform/detection)
-* **Docker** 9 Up: backend (pango+PG+yara 4.5.2 + 5 rules) :8000, frontend (YARA panel) :3000, nginx 8082, `agent` real POST via nginx, db healthy pgdata persisting
+* **Harden & Persist** `backend/app/storage.py` + `cache.py` per ARCHITECTURE §11 + FORENSICS §64 — `storage.py` MinIO `jocky-reports`/`jocky-evidence` buckets (auto-create, fallback mem, `put_report/get_report/put_bytes/get_bytes`), `cache.py` Redis `cache_get/set/invalidate` (TTL, fallback mem); `backend/app/main.py` now `GET /health` includes `minio`/`redis` + `GET /api/storage/status`, `POST /api/artifacts/upload` (5MB 413 per SECURITY_MODEL §28) + `GET /api/artifacts/{key}`, `POST /api/evidence` → MinIO artifact, `GET /api/cases/{id}/report` → MinIO + Redis `X-Report-Cached`; 8 `test_storage` tests
+* **Tests** 90/90: 9+13+3+6+4+6+8+12+10+11+8 (compiler/backend/e2e/forensic/report/yara/agent/grammar/platform/detection/storage)
+* **Docker** 9 Up: backend (pango+PG+yara 4.5.2 + 5 rules + minio/redis status) :8000, frontend :3000, nginx 8082, `agent` real POST via nginx, db healthy pgdata+miniodata persisting
 
 ### Still Pending / Not Verified
 
 * AST visitor / full block/funcDecl control-flow (grammar has them, IR only emits MemberCall ops)
-* Sigma/YARA rule expansion + auto correlation (next milestone)
-* Redis/MinIO artifact storage not yet wired
+* Dashboard case isolation UI + host selector (next milestone per ROADMAP §15)
+* Real WinAPI/ETW `/proc` live collection (beyond synthetic — lab remains synthetic per SECURITY_MODEL §47)
 
 ---
 
@@ -324,12 +327,24 @@ Progressively add operations per LANGUAGE_SPEC.md §10, each with capability, sy
 11. ✅ Lexer/Parser grammar-wired (jocky_lexer.py per g4 + Lexer.cpp, replaces RE_CALL, line:col errors) — done (12 grammar tests, 61 total)
 12. ✅ Platform providers (IProcess/IFile/INetwork per DESIGN §22, Windows vs Linux factory, same JOCKY → different adapter, normalized schema) — done (10 platform tests, 71 total)
 13. ✅ Detection depth (YARA 3→5 rules + Sigma 2 rules + behavioral engine per FORENSICS §31, mitre/severity/confidence) — done (11 detection tests, 82 total)
-14. Case isolation UI (dropdown of cases from /api/cases) + host selector + filter
-15. Redis/MinIO wiring for artifact storage (currently declared but not used) + WeasyPrint PDF artifact to MinIO (optional)
+14. ✅ Harden & Persist (MinIO jocky-reports/jocky-evidence + Redis cache per ARCHITECTURE §11, report→MinIO + cache, artifacts) — done (8 storage tests, 90 total)
+15. Case isolation UI (dropdown of cases from /api/cases) + host selector + filter
+16. Real WinAPI/ETW live collection hardening (optional beyond synthetic)
 
 ---
 
 # 11. Recent Changes
+
+### 2026-08-28 — Harden & Persist (MinIO + Redis)
+
+#### Added
+- `backend/app/storage.py` (120 lines) per ARCHITECTURE §11 + FORENSICS §47 — `MINIO_ENDPOINT` (`minio:9000` docker / fallback `localhost:9000`), `BUCKET_REPORTS=jocky-reports` + `BUCKET_EVIDENCE=jocky-evidence` (auto-create), `put_bytes/get_bytes`, `put_report(case_id, pdf)`/`get_report`, `put_evidence_artifact`, `storage_status()`, mem fallback `_mem_store` for host tests when MinIO not reachable
+- `backend/app/cache.py` (110 lines) per ARCHITECTURE §11 — `REDIS_URL` (`redis://redis:6379/0` docker / fallback localhost), `cache_get/set/invalidate` (TTL, JSON, mem fallback `_mem_cache`), `cache_status()`
+- `backend/app/main.py` — `_storage`/`_cache` import + `GET /health` adds `minio`/`redis` + `storage`/`cache` fields, `GET /api/storage/status`, `POST /api/artifacts/upload` (5MB 413 per SECURITY_MODEL §28) + `GET /api/artifacts/{key}`, `POST /api/evidence` → `put_evidence_artifact` + cache invalidate, `GET /api/cases/{id}/report` → `put_report` to MinIO + Redis `TTL 300` with `X-Report-Cached`, `POST /api/report` → MinIO
+- `tests/test_storage.py` (8) — health includes minio/redis, storage status, put/get fallback, cache fallback, report→MinIO, evidence artifact, artifact upload/get, too-large 413
+
+#### Verified
+- `pytest` 90/90 (8 new) — `GET /health` `minio`/`redis` booleans, `GET /api/storage/status`, `put_report` fallback, `cache_get/set`, `GET /api/cases/777/report` `%PDF` + MinIO `get_report(777)`, `POST /api/evidence` artifact, artifact upload 413 on 6MB
 
 ### 2026-08-28 — Detection Depth (YARA 5 + Sigma 2 + Behavioral)
 

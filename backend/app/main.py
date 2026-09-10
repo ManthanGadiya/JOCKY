@@ -22,6 +22,34 @@ except ImportError:
     except Exception:
         _db = None
 
+# --- Storage / Cache (MinIO + Redis) per ARCHITECTURE §11 ---
+try:
+    from . import storage as _storage
+    from . import cache as _cache
+except ImportError:
+    try:
+        import backend.app.storage as _storage
+        import backend.app.cache as _cache
+    except Exception:
+        _storage = None
+        _cache = None
+
+def _storage_status():
+    if _storage and hasattr(_storage, "storage_status"):
+        try:
+            return _storage.storage_status()
+        except Exception:
+            return {"minio_available": False}
+    return {"minio_available": False}
+
+def _cache_status():
+    if _cache and hasattr(_cache, "cache_status"):
+        try:
+            return _cache.cache_status()
+        except Exception:
+            return {"redis_available": False}
+    return {"redis_available": False}
+
 def _db_available() -> bool:
     return _db is not None and getattr(_db, "is_db_available", lambda: False)()
 
@@ -479,7 +507,10 @@ def yara_scan_content(content: str) -> tuple[List[str], bool]:
 @app.get("/health")
 def health():
     yara_rules = _yara_rules_path()
-    return {"status":"ok","service":"jocky-backend","layers":"L5+L6+L7","version":"1.2.0","jocky_ir_version":1, "db": _db_available(), "postgres": _db_available(), "yara": yara_rules is not None, "yara_rules": yara_rules}
+    stor = _storage_status()
+    cach = _cache_status()
+    return {"status":"ok","service":"jocky-backend","layers":"L5+L6+L7","version":"1.2.0","jocky_ir_version":1, "db": _db_available(), "postgres": _db_available(), "yara": yara_rules is not None, "yara_rules": yara_rules,
+            "minio": stor.get("minio_available", False), "redis": cach.get("redis_available", False), "storage": stor, "cache": cach}
 
 @app.get("/api/cases")
 def list_cases():
@@ -496,6 +527,19 @@ def post_evidence(ev: Evidence):
     total = len(_get_evidence())
     rec = {"id": f"EV-{datetime.datetime.utcnow().strftime('%Y%m%d')}-{total+1:06d}", "agent_id": ev.agent_id, "type": ev.type, "payload": ev.payload, "sha256": sha, "timestamp": time.time(), "chain_of_custody": f"{sha}:{ev.agent_id}:{time.time()}", "risk": risk, "case_id": 1, "host_id": ev.agent_id, "op": ev.type, "source": "direct_post", "collected_at": datetime.datetime.utcnow().isoformat()+"Z", "observed_at": datetime.datetime.utcnow().isoformat()+"Z", "collector": "jocky-runtime:1.0", "schema_version": 1, "integrity": {"sha256": sha, "verified": True}, "provenance": {"ir_hash": "", "source_hash": "", "capabilities": []}}
     _add_evidence(rec)
+    # Persist artifact to MinIO per ARCHITECTURE §11 + FORENSICS §47
+    try:
+        if _storage:
+            _storage.put_evidence_artifact(rec["id"], json.dumps(rec).encode(), "application/json")
+    except Exception as e:
+        print(f"[storage] evidence artifact failed {rec['id']}: {e}")
+    # Invalidate cache for evidence lists
+    try:
+        if _cache:
+            _cache.cache_invalidate(key="evidence:list:1")
+            _cache.cache_invalidate(key=f"evidence:list:{rec['case_id']}")
+    except Exception:
+        pass
     return rec
 
 @app.post("/api/compile")
@@ -870,14 +914,37 @@ def polymorphic_demo(req: PolyDemoRequest):
 
 @app.get("/api/cases/{case_id}/report")
 def get_report(case_id: int, title: Optional[str] = None):
-    # validate case exists or allow empty report (UX: still generate)
     html = build_report_html(case_id, title)
+    # Try cache first per ARCHITECTURE §11 Redis
+    cache_key = f"report:pdf:{case_id}:{title or ''}"
+    try:
+        if _cache:
+            cached = _cache.cache_get(cache_key)
+            if cached and isinstance(cached, dict) and cached.get("pdf_b64"):
+                import base64
+                pdf = base64.b64decode(cached["pdf_b64"])
+                return StreamingResponse(io.BytesIO(pdf), media_type="application/pdf",
+                    headers={"Content-Disposition": f'attachment; filename=\"JOCKY_case_{case_id}_report.pdf\"', "X-Report-Cached": "true"})
+    except Exception:
+        pass
     try:
         pdf = render_pdf_bytes(html)
+        # Store to MinIO per FORENSICS §64 + ARCHITECTURE §11
+        try:
+            if _storage:
+                _storage.put_report(case_id, pdf)
+        except Exception as e:
+            print(f"[storage] report put failed case {case_id}: {e}")
+        # Cache in Redis (TTL 300s) + mem fallback
+        try:
+            if _cache:
+                import base64
+                _cache.cache_set(cache_key, {"pdf_b64": base64.b64encode(pdf).decode(), "size": len(pdf)}, ttl=300)
+        except Exception:
+            pass
         return StreamingResponse(io.BytesIO(pdf), media_type="application/pdf",
             headers={"Content-Disposition": f'attachment; filename=\"JOCKY_case_{case_id}_report.pdf\"'})
     except Exception as e:
-        # fallback to html if weasyprint deps missing on host test — still testable
         return StreamingResponse(io.BytesIO(html.encode()), media_type="text/html",
             headers={"X-Report-Fallback": str(e)[:200]})
 
@@ -886,8 +953,38 @@ def post_report(req: ReportRequest):
     html = build_report_html(req.case_id, req.title)
     try:
         pdf = render_pdf_bytes(html)
+        try:
+            if _storage:
+                _storage.put_report(req.case_id, pdf)
+        except Exception:
+            pass
         return StreamingResponse(io.BytesIO(pdf), media_type="application/pdf",
             headers={"Content-Disposition": f'attachment; filename=\"JOCKY_case_{req.case_id}_report.pdf\"'})
     except Exception as e:
         return StreamingResponse(io.BytesIO(html.encode()), media_type="text/html",
             headers={"X-Report-Fallback": str(e)[:200]})
+
+# --- Storage/Cache introspection per ARCHITECTURE §11 ---
+@app.get("/api/storage/status")
+def storage_status():
+    return {"storage": _storage_status(), "cache": _cache_status(), "health": {"minio": _storage_status().get("minio_available", False), "redis": _cache_status().get("redis_available", False)}}
+
+@app.post("/api/artifacts/upload")
+def artifact_upload(payload: Dict[str, Any]):
+    """Upload arbitrary artifact to MinIO (evidence/report) — 5MB limit per SECURITY_MODEL §28."""
+    data = json.dumps(payload).encode()
+    if len(data) > 5*1024*1024:
+        raise HTTPException(status_code=413, detail="Artifact too large — max 5MB per SECURITY_MODEL resource limits")
+    key = f"artifacts/{hashlib.sha256(data).hexdigest()[:12]}.json"
+    if _storage:
+        _storage.put_bytes(_storage.BUCKET_EVIDENCE, key, data, "application/json")
+    return {"key": key, "sha256": hashlib.sha256(data).hexdigest(), "size": len(data), "minio": _storage_status().get("minio_available", False)}
+
+@app.get("/api/artifacts/{key:path}")
+def artifact_get(key: str):
+    if _storage:
+        data = _storage.get_bytes(_storage.BUCKET_EVIDENCE, key)
+        if data:
+            return {"key": key, "size": len(data), "sha256": hashlib.sha256(data).hexdigest()}
+    raise HTTPException(status_code=404, detail="Artifact not found")
+
