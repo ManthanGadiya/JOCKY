@@ -6,6 +6,17 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/) and [Sem
 
 ## [Unreleased]
 
+## 2026-08-28 — Harden & Persist — MinIO + Redis (90 tests)
+
+### Added
+- `backend/app/storage.py` — MinIO `jocky-reports`/`jocky-evidence` (auto-create, mem fallback), `put_report`/`get_report`/`put_bytes`/`get_bytes`/`put_evidence_artifact`, `storage_status()`
+- `backend/app/cache.py` — Redis `cache_get/set/invalidate` (TTL 60/300, mem fallback), `cache_status()`
+- `backend/app/main.py` — `GET /health` `minio`/`redis` fields + `storage`/`cache`, `GET /api/storage/status`, `POST /api/artifacts/upload` (5MB 413) + `GET /api/artifacts/{key}`, `POST /api/evidence` artifact + cache invalidate, `GET /api/cases/{id}/report` MinIO + Redis `X-Report-Cached`
+- `tests/test_storage.py` (8) — health, storage status, put/get, cache, report→MinIO, evidence artifact, artifact upload/get, 413
+
+### Verified
+- `pytest` 90/90 (8 new)
+
 ## 2026-08-28 — Detection Depth — YARA 5 + Sigma 2 + Behavioral Engine
 
 ### Added
