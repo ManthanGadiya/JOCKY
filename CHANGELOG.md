@@ -6,6 +6,13 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/) and [Sem
 
 ## [Unreleased]
 
+## 2026-08-28 — Report Hardening — Versioned History (98 tests)
+
+### Added
+- `backend/app/storage.py` — `list_reports` + `delete_reports_for_case` + `put_report` versioned `_{ts}_{sha8}.pdf` per `FORENSICS §64`
+- `backend/app/main.py` — `GET /api/cases/{id}/reports` + `GET /api/cases/{id}/reports/{key}`
+- `tests/test_report_hardening.py` (3) — history list, direct storage list, health storage
+
 ## 2026-08-28 — Dashboard Enrichment — Timeline Search + Risk History + Graph Select
 
 ### Added

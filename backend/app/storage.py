@@ -99,16 +99,60 @@ def get_bytes(bucket: str, key: str) -> Optional[bytes]:
     return _mem_store.get(_mem_key(bucket, key))
 
 def put_report(case_id: int, pdf_bytes: bytes) -> str:
-    """Store PDF report per FORENSICS_SPEC §64 + ARCHITECTURE §11. Returns key."""
-    key = f"case-{case_id}/JOCKY_case_{case_id}_report.pdf"
-    put_bytes(BUCKET_REPORTS, key, pdf_bytes, "application/pdf")
-    # also store via mem fallback for host test easy retrieval
-    _mem_store[_mem_key(BUCKET_REPORTS, key)] = pdf_bytes
-    return key
+    """Store PDF report per FORENSICS_SPEC §64 + ARCHITECTURE §11. Returns latest key. Also stores versioned key for history."""
+    latest_key = f"case-{case_id}/JOCKY_case_{case_id}_report.pdf"
+    put_bytes(BUCKET_REPORTS, latest_key, pdf_bytes, "application/pdf")
+    _mem_store[_mem_key(BUCKET_REPORTS, latest_key)] = pdf_bytes
+    # versioned history key per §49 schema versioning + §64 report provenance
+    ts = time.strftime("%Y%m%dT%H%M%SZ", time.gmtime())
+    ver_key = f"case-{case_id}/JOCKY_case_{case_id}_report_{ts}_{hashlib.sha256(pdf_bytes).hexdigest()[:8]}.pdf"
+    put_bytes(BUCKET_REPORTS, ver_key, pdf_bytes, "application/pdf")
+    _mem_store[_mem_key(BUCKET_REPORTS, ver_key)] = pdf_bytes
+    return latest_key
 
 def get_report(case_id: int) -> Optional[bytes]:
     key = f"case-{case_id}/JOCKY_case_{case_id}_report.pdf"
     return get_bytes(BUCKET_REPORTS, key)
+
+def list_reports(case_id: int) -> list:
+    """List versioned reports for case from mem + MinIO (best-effort history)."""
+    prefix = f"case-{case_id}/"
+    out = []
+    # mem fallback scan
+    for k, v in list(_mem_store.items()):
+        if k.startswith(_mem_key(BUCKET_REPORTS, prefix)) and k.endswith(".pdf"):
+            # extract key after bucket/
+            key = k.split("/",1)[1] if "/" in k else k
+            out.append({"key": key, "size": len(v), "sha256": hashlib.sha256(v).hexdigest(), "bucket": BUCKET_REPORTS})
+    # MinIO scan if available
+    if is_minio_available():
+        try:
+            objs = _client.list_objects(BUCKET_REPORTS, prefix=prefix, recursive=True)
+            for obj in objs:
+                key = obj.object_name
+                if not any(r["key"]==key for r in out):
+                    out.append({"key": key, "size": obj.size, "sha256": "", "bucket": BUCKET_REPORTS, "last_modified": str(obj.last_modified) if obj.last_modified else ""})
+        except Exception:
+            pass
+    # sort by key (timestamp in name) descending — latest last, but return sorted
+    out.sort(key=lambda x: x["key"])
+    return out
+
+def delete_reports_for_case(case_id: int) -> int:
+    """Delete all report keys for a case (used for test cleanup)."""
+    prefix = f"case-{case_id}/"
+    to_del = [k for k in list(_mem_store.keys()) if k.startswith(_mem_key(BUCKET_REPORTS, prefix))]
+    for k in to_del:
+        _mem_store.pop(k, None)
+    # MinIO delete if available
+    if is_minio_available():
+        try:
+            objs = list(_client.list_objects(BUCKET_REPORTS, prefix=prefix, recursive=True))
+            for o in objs:
+                _client.remove_object(BUCKET_REPORTS, o.object_name)
+        except Exception:
+            pass
+    return len(to_del)
 
 def put_evidence_artifact(evidence_id: str, data: bytes, content_type: str = "application/json") -> str:
     key = f"{evidence_id}.json"

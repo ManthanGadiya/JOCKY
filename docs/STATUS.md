@@ -58,13 +58,14 @@ Build a safe, reproducible, defensive forensic investigation platform around the
 | Docker environment      | 🟢 Verified     | 9 Up: backend (pango + postgres + **yara 4.5.2** + **minio+redis** verified in `/health`) :8000, frontend :3000, nginx 8082, db healthy `pgdata+miniodata` persisting |
 | Database                | 🟢 Verified     | Postgres 15 persistence — survive restart (case 90: 2→restart→2) + MinIO `jocky-reports`/`jocky-evidence` buckets |
 | Cache / Queue           | 🟢 Verified     | **Redis** `cache.py` (`cache_get/set/invalidate`, TTL, mem fallback, `redis_url` health) — 8 tests |
-| Storage                 | 🟢 Verified     | **MinIO** `storage.py` (`put_report`/`get_report`/`put_evidence_artifact`/`put_bytes`/`get_bytes`, bucket auto-create, mem fallback) — 8 tests |
+| Storage                 | 🟢 Verified     | **MinIO** `storage.py` (`put_report`/`get_report`/`put_evidence_artifact`/`put_bytes`/`get_bytes` + `list_reports`/`delete_reports` history, versioned `JOCKY_case_{id}_report_{ts}_{sha}.pdf`) — 8+3 tests |
+| Reports                 | 🟢 Verified     | **Versioned history** `GET /api/cases/{id}/reports` + `GET /api/cases/{id}/reports/{key}` per FORENSICS §64 — `put_report` now dual-writes latest + versioned timestamp key (11 tests total for report+storage) |
 | Windows support         | 🟢 Verified     | **Synthetic Windows** `Windows*Provider` (WinAPI-style paths `C:\Windows\...`, `uid`→`SYSTEM`, `command_line`) — same Sigma T1055 preserved — verified via `platform=windows` contract tests |
 | Linux support           | 🟢 Verified     | **Synthetic Linux** `Linux*Provider` (`/proc`-style `/usr/bin/...`, `uid`, `inode`, `lsmod`) — same normalized contract — verified via `platform=linux` — 10 tests |
 | Controlled laboratory   | 🟢 Verified     | 6 fixtures + live poly demo (3 IRs same YARA cluster) + full-sweep cases + report + `POST /api/cases` isolation (5 tests) |
 | End-to-end workflow     | 🟢 Verified     | Full sweep → envelope → YARA → Timeline/Graph/Risk→Report persists (Point 1+2) |
 | Dashboard               | 🟢 Verified     | **Case isolation + enrichment** `App.tsx` `caseId` dropdown + `hostFilter`/`typeFilter`/`platformFilter` + `runPlatform` + `filteredEvidence` + **Timeline search/risk filter** + **Risk history sparkline** + **Graph node select** — per FORENSICS §7 + ARCHITECTURE §11 + DESIGN §41 |
-| Automated tests         | 🟢 Verified     | **95 tests** (compiler 9, backend 13, e2e 3, forensic 6, report 4, yara 6, agent 8, grammar 12, platform 10, detection 11, storage 8, isolation 5) all passing |
+| Automated tests         | 🟢 Verified     | **98 tests** (compiler 9, backend 13, e2e 3, forensic 6, report 4, yara 6, agent 8, grammar 12, platform 10, detection 11, storage 8, isolation 5, report-harden 3) all passing |
 
 ---
 
@@ -346,6 +347,16 @@ Progressively add operations per LANGUAGE_SPEC.md §10, each with capability, sy
 
 #### Verified
 - `pytest` 95/95 (5 new) — case isolation verified via TestClient (evidence all `case_id==nid`, timeline/graph/risk isolated, `GET /api/cases` count grows, platform windows vs linux both present in same case)
+
+### 2026-08-28 — Report Hardening (Versioned History)
+
+#### Added
+- `backend/app/storage.py` — `list_reports(case_id)` (scan `jocky-reports` mem+MinIO prefix `case-{id}/`, sorted) + `delete_reports_for_case` (test cleanup) + `put_report` now dual-writes `latest` + versioned `JOCKY_case_{id}_report_{ts}_{sha8}.pdf` per `FORENSICS §64` provenance + `ARCHITECTURE §11` artifact store
+- `backend/app/main.py` — `GET /api/cases/{id}/reports` (list `reports/count`, via `list_reports`) + `GET /api/cases/{id}/reports/{key}` (fetch versioned PDF via `get_bytes`)
+- `tests/test_report_hardening.py` (3) — `test_report_history_list` (creates case, generates 2 reports, seeds versioned via `put_report` and verifies `count≥2` + versioned fetch), `test_storage_list_reports_direct`, `test_health_includes_storage_history`
+
+#### Verified
+- `pytest` 98/98 (3 new)
 
 ### 2026-08-28 — Dashboard Enrichment (Timeline Search + Risk History + Graph Select)
 
