@@ -27,6 +27,10 @@ export default function App(){
   const [lastRun, setLastRun] = useState<string>("")
   const [yara, setYara] = useState<any>(null)
   const [poly, setPoly] = useState<any>(null)
+  // Case isolation + host/filter per ARCHITECTURE §11 + FORENSICS §7 (evidence must belong to case) + ROADMAP §11
+  const [hostFilter, setHostFilter] = useState<string>("all")
+  const [typeFilter, setTypeFilter] = useState<string>("all")
+  const [platformFilter, setPlatformFilter] = useState<string>("all")
 
   const fetchYara = async ()=>{
     try{ const r=await fetch(`${API}/api/yara/status`).then(r=>r.json()); setYara(r) }catch{}
@@ -53,11 +57,26 @@ export default function App(){
       setGraph(g)
       const cs = await fetch(`${API}/api/cases`).then(r=>r.json())
       setCases(cs.cases||[])
+      // auto-create case 1 if no cases yet (for demo)
+      if((cs.cases||[]).length===0 && cid===1){
+        try{ await fetch(`${API}/api/cases`,{method:'POST',headers:{'Content-Type':'application/json'},body: JSON.stringify({title: 'case-1'})}) }catch{}
+      }
       const ev = await fetch(`${API}/api/evidence?case_id=${cid}`).then(r=>r.json())
       setEvidence(ev.evidence||[])
       const f = await fetch(`${API}/api/findings?case_id=${cid}`).then(r=>r.json())
       setFindings(f.findings||[])
     }catch(e){/* fallback keeps last values */}
+  }
+
+  const createCase = async ()=>{
+    try{
+      const res = await fetch(`${API}/api/cases`,{method:'POST',headers:{'Content-Type':'application/json'},body: JSON.stringify({title: `case-${cases.length+1}`})})
+      const data = await res.json()
+      const nid = data.id ?? data.case?.id ?? (cases.length+1)
+      setCaseId(nid)
+      setLastRun(`Created case ${nid}`)
+      await refresh(nid)
+    }catch(e:any){ setError(e.message||String(e)) }
   }
 
   useEffect(()=>{ refresh(caseId); fetchYara() },[caseId])
@@ -79,10 +98,12 @@ export default function App(){
     finally{ setLoading(false) }
   }
 
+  const [runPlatform, setRunPlatform] = useState<string>("linux")
+
   const runExecute = async ()=>{
     setLoading(true); setError("")
     try{
-      const res = await fetch(`${API}/api/run`,{method:'POST',headers:{'Content-Type':'application/json'},body: JSON.stringify({source, agent_id:'WIN-001', host_id:'HOST-001', case_id: caseId})})
+      const res = await fetch(`${API}/api/run`,{method:'POST',headers:{'Content-Type':'application/json'},body: JSON.stringify({source, agent_id:'WIN-001', host_id:'HOST-001', case_id: caseId, platform: runPlatform})})
       const data = await res.json()
       if(!res.ok) throw new Error(data.detail || 'run failed')
       setIr(data.ir); setCaps(data.capabilities||[]); setOps(data.ops||[])
@@ -113,12 +134,52 @@ export default function App(){
     finally{ setLoading(false) }
   }
 
+  // Derived filters for evidence (case isolation + host/type/platform per FORENSICS §7, ARCHITECTURE §11)
+  const hosts = Array.from(new Set(evidence.map((e:any)=> e.host_id || e.hostId || 'unknown')))
+  const filteredEvidence = evidence.filter((e:any)=>{
+    if(hostFilter!=="all" && e.host_id!==hostFilter) return false
+    if(typeFilter!=="all" && e.type!==typeFilter) return false
+    if(platformFilter!=="all" && (e.payload?.platform||'unknown')!==platformFilter) return false
+    return true
+  })
+
   return (
     <div className="min-h-screen p-6 bg-zinc-950 text-zinc-100">
       <header className="flex justify-between items-center border-b border-zinc-800 pb-4 mb-6">
         <h1 className="text-2xl font-bold">JOCKY Forensic Dashboard <span className="text-violet-400">L8 Correlation</span></h1>
-        <span className="text-xs bg-zinc-900 px-3 py-1 rounded">Backend: {cases.length} cases • {evidence.length} evidence • IR v1 • YARA {yara?.yara_binary_used ? '✅ binary' : yara?.yara_available ? '✅ rules' : '⏳ fallback'} • Nginx 8082 • Postgres {yara? '✅' : ''}</span>
+        <span className="text-xs bg-zinc-900 px-3 py-1 rounded">Backend: {cases.length} cases • {evidence.length} evidence • IR v1 • YARA {yara?.yara_binary_used ? '✅ binary' : yara?.yara_available ? '✅ rules' : '⏳ fallback'} • Nginx 8082 • Postgres {yara? '✅' : ''} • MinIO+Redis {cases.length>0?'✅':''}</span>
       </header>
+
+      {/* Case isolation bar — ARCHITECTURE §11 case management + FORENSICS §7 case isolation */}
+      <div className="bg-zinc-900 rounded-xl p-3 border border-zinc-800 mb-4 flex flex-wrap gap-3 items-center">
+        <span className="text-xs font-semibold">Case</span>
+        <select value={caseId} onChange={e=> setCaseId(Number(e.target.value))} className="bg-zinc-950 border border-zinc-700 rounded px-2 py-1 text-sm">
+          {cases.length===0 && <option value={caseId}>case-{caseId}</option>}
+          {cases.map((c:any)=><option key={c.id} value={c.id}>case-{c.id} {c.title? `— ${c.title}`:''} (risk {c.risk})</option>)}
+        </select>
+        <button onClick={createCase} disabled={loading} className="text-xs bg-violet-600 hover:bg-violet-500 px-3 py-1 rounded">+ New Case</button>
+        <span className="text-xs text-zinc-500 ml-2">Host</span>
+        <select value={hostFilter} onChange={e=> setHostFilter(e.target.value)} className="bg-zinc-950 border border-zinc-700 rounded px-2 py-1 text-xs">
+          <option value="all">all hosts ({hosts.length})</option>
+          {hosts.map((h:string)=><option key={h} value={h}>{h}</option>)}
+        </select>
+        <span className="text-xs text-zinc-500">Type</span>
+        <select value={typeFilter} onChange={e=> setTypeFilter(e.target.value)} className="bg-zinc-950 border border-zinc-700 rounded px-2 py-1 text-xs">
+          <option value="all">all types</option>
+          <option value="system">system</option>
+          <option value="process">process</option>
+          <option value="file">file</option>
+          <option value="network">network</option>
+          <option value="driver">driver</option>
+        </select>
+        <span className="text-xs text-zinc-500">Platform</span>
+        <select value={platformFilter} onChange={e=> setPlatformFilter(e.target.value)} className="bg-zinc-950 border border-zinc-700 rounded px-2 py-1 text-xs">
+          <option value="all">all</option>
+          <option value="windows">windows</option>
+          <option value="linux">linux</option>
+        </select>
+        <span className="text-xs text-zinc-500 ml-auto">{filteredEvidence.length}/{evidence.length} evidence in case {caseId}{hostFilter!=='all'||typeFilter!=='all'||platformFilter!=='all' ? ' (filtered)':''}</span>
+      </div>
 
       <div className="bg-zinc-900 rounded-xl p-4 border border-zinc-800 mb-6">
         <div className="flex justify-between items-center mb-2"><h2 className="font-semibold">YARA Detection — Polymorphic Proof (Point 1+2) — hash ≠ detection</h2><button onClick={runPoly} disabled={loading} className="text-xs bg-amber-600 hover:bg-amber-500 px-3 py-1 rounded">Run YARA Poly Demo</button></div>
@@ -140,9 +201,10 @@ export default function App(){
           <div className="col-span-5">
             <label className="text-xs text-zinc-400">JOCKY source (.jocky)</label>
             <textarea value={source} onChange={e=>setSource(e.target.value)} rows={8} className="w-full mt-1 bg-zinc-950 border border-zinc-700 rounded p-2 font-mono text-sm" placeholder={"system.info();"} />
-            <div className="flex gap-2 mt-2 flex-wrap">
+            <div className="flex gap-2 mt-2 flex-wrap items-center">
               <button onClick={runCompile} disabled={loading} className="bg-zinc-800 hover:bg-zinc-700 border border-zinc-700 px-4 py-2 rounded text-sm disabled:opacity-50">Compile</button>
-              <button onClick={runExecute} disabled={loading} className="bg-violet-600 hover:bg-violet-500 px-4 py-2 rounded text-sm font-semibold disabled:opacity-50">Run</button>
+              <select value={runPlatform} onChange={e=> setRunPlatform(e.target.value)} className="bg-zinc-950 border border-zinc-700 rounded px-2 py-2 text-xs"><option value="linux">linux</option><option value="windows">windows</option></select>
+              <button onClick={runExecute} disabled={loading} className="bg-violet-600 hover:bg-violet-500 px-4 py-2 rounded text-sm font-semibold disabled:opacity-50">Run ({runPlatform})</button>
               <button onClick={()=>setSource("system.info();")} className="text-xs px-2 py-1 bg-zinc-800 rounded">system.info()</button>
               <button onClick={()=>setSource("process.list();")} className="text-xs px-2 py-1 bg-zinc-800 rounded">process.list()</button>
               <button onClick={()=>setSource('file.hash("/evidence/sample.exe");')} className="text-xs px-2 py-1 bg-zinc-800 rounded">file.hash</button>
@@ -165,17 +227,17 @@ export default function App(){
       <div className="grid grid-cols-12 gap-6">
         <div className="col-span-8 bg-zinc-900 rounded-xl p-4 border border-zinc-800">
           <h2 className="font-semibold mb-2">Evidence Knowledge Graph (React Flow) — Live</h2>
-          <p className="text-xs text-zinc-500 mb-2">Host → Evidence nodes (op/type) → Finding • MITRE {graph.mitre?.join(', ')||'T1055/T1068'} • {graph.nodes?.length||0} nodes {evidence.length} evidence</p>
+          <p className="text-xs text-zinc-500 mb-2">Host → Evidence nodes (op/type) → Finding • MITRE {graph.mitre?.join(', ')||'T1055/T1068'} • {graph.nodes?.length||0} nodes {filteredEvidence.length}/{evidence.length} evidence {platformFilter!=='all' ? `· platform=${platformFilter}`:''}</p>
           <Graph data={graph} />
-          {evidence.length>0 && <div className="mt-3 text-xs"><div className="font-semibold mb-1">Evidence store (case {caseId}) — canonical envelope schema_version 1 + integrity SHA256:</div>
+          {evidence.length>0 && <div className="mt-3 text-xs"><div className="font-semibold mb-1">Evidence store (case {caseId}) — canonical envelope schema_version 1 + integrity SHA256 {filteredEvidence.length!==evidence.length?`· filtered ${filteredEvidence.length}/${evidence.length}`:''}:</div>
             <div className="space-y-1 max-h-52 overflow-auto bg-zinc-950 p-2 rounded border border-zinc-800">
-              {evidence.slice(-8).map((e:any)=>{
+              {filteredEvidence.slice(-8).map((e:any)=>{
                 const p=e.payload||{}
-                const detail = e.type==='process' ? `${p.count} procs${p.processes?.some((x:any)=>x.ppid_anomaly)?' • ppid anomaly':''}` :
-                  e.type==='file' ? `${p.path} ${p.hashes?.sha256?.slice(0,12)??''} ${p.yara_hit?'• YARA':''}` :
-                  e.type==='network' ? `${p.connections?.length} conns ${p.connections?.some((c:any)=>c.remote_address==='192.0.2.20')?'• C2':''}` :
+                const detail = e.type==='process' ? `${p.count} procs${p.processes?.some((x:any)=>x.ppid_anomaly)?' • ppid anomaly':''}${p.platform?` · ${p.platform}`:''}` :
+                  e.type==='file' ? `${p.path} ${p.hashes?.sha256?.slice(0,12)??''} ${p.yara_hit?'• YARA':''}${p.platform?` · ${p.platform}`:''}` :
+                  e.type==='network' ? `${p.connections?.length} conns ${p.connections?.some((c:any)=>c.remote_address==='192.0.2.20')?'• C2':''}${p.platform?` · ${p.platform}`:''}` :
                   JSON.stringify(p).slice(0,80)
-                return <div key={e.id} className="font-mono text-xs"><span className="text-violet-400">{e.id}</span> {e.op} risk {e.risk} • {detail}</div>
+                return <div key={e.id} className="font-mono text-xs"><span className="text-violet-400">{e.id}</span> {e.op} host {e.host_id} risk {e.risk} • {detail}</div>
               })}
             </div>
           </div>}
