@@ -12,6 +12,13 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/) and [Sem
 - `backend/app/main.py` `GET /api/cases/{id}/graph` → `correlations` (temporal 0.6, pid 0.8, process→file 0.85, process→net 0.9, supports 0.95) + `weight` + `correlation_count` + platform on nodes per `ARCHITECTURE §14` + `FORENSICS §43`
 - `tests/test_correlation.py` (6) — full sweep correlations, temporal window, pid, mitre/platform, weight, confidence
 
+## 2026-08-28 — Auth Hardening — JWT per SECURITY §19-20 (112 tests)
+
+### Added
+- `backend/app/auth.py` — `create_token`/`verify_token` `HS256` + `get_current_user` (`Bearer`/`X-API-Key`, `AUTH_REQUIRED` env default false, strict 401 when true)
+- `backend/app/main.py` — `POST /api/auth/login` + `GET /api/auth/me` + `GET /api/auth/status` + `auth_required` in storage status
+- `tests/test_auth.py` (8) — login JWT, verify, bypass, invalid 401, strict mode
+
 ## 2026-08-28 — Report Hardening — Versioned History (98 tests)
 
 ### Added
