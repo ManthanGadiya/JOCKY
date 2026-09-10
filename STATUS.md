@@ -63,7 +63,7 @@ Build a safe, reproducible, defensive forensic investigation platform around the
 | Linux support           | 🟢 Verified     | **Synthetic Linux** `Linux*Provider` (`/proc`-style `/usr/bin/...`, `uid`, `inode`, `lsmod`) — same normalized contract — verified via `platform=linux` — 10 tests |
 | Controlled laboratory   | 🟢 Verified     | 6 fixtures + live poly demo (3 IRs same YARA cluster) + full-sweep cases + report + `POST /api/cases` isolation (5 tests) |
 | End-to-end workflow     | 🟢 Verified     | Full sweep → envelope → YARA → Timeline/Graph/Risk→Report persists (Point 1+2) |
-| Dashboard               | 🟢 Verified     | **Case isolation UI** `App.tsx` `caseId` dropdown + `hostFilter`/`typeFilter`/`platformFilter` + `+ New Case` + `runPlatform` selector + `filteredEvidence` — per FORENSICS §7 + ARCHITECTURE §11 |
+| Dashboard               | 🟢 Verified     | **Case isolation + enrichment** `App.tsx` `caseId` dropdown + `hostFilter`/`typeFilter`/`platformFilter` + `runPlatform` + `filteredEvidence` + **Timeline search/risk filter** + **Risk history sparkline** + **Graph node select** — per FORENSICS §7 + ARCHITECTURE §11 + DESIGN §41 |
 | Automated tests         | 🟢 Verified     | **95 tests** (compiler 9, backend 13, e2e 3, forensic 6, report 4, yara 6, agent 8, grammar 12, platform 10, detection 11, storage 8, isolation 5) all passing |
 
 ---
@@ -346,6 +346,18 @@ Progressively add operations per LANGUAGE_SPEC.md §10, each with capability, sy
 
 #### Verified
 - `pytest` 95/95 (5 new) — case isolation verified via TestClient (evidence all `case_id==nid`, timeline/graph/risk isolated, `GET /api/cases` count grows, platform windows vs linux both present in same case)
+
+### 2026-08-28 — Dashboard Enrichment (Timeline Search + Risk History + Graph Select)
+
+#### Added
+- `frontend/src/components/Timeline.tsx` — search `q` filter (id/type/op/host/mitre/payload) + `minRisk` selector (`all/≥30/≥60/≥80`) + `filtered` count + click handler (`onClick` alert with `id/risk/op/host`) per DESIGN §41 presentation layer
+- `frontend/src/components/RiskGauge.tsx` — `history?:number[]` prop, sparkline SVG (last 20, `polyline` `stroke` per risk color, `transition-all`) + `MEDIUM→LOW` level + weighted text `PPID*30 + hollowed*40 + driver*15 + yara*20 + C2*30 (hash≠detection)`
+- `frontend/src/components/Graph.tsx` — `onSelect?:(id)=>void` + `onNodeClick` → parent `selectedNode` chip
+- `frontend/src/App.tsx` — `riskHistory` state (push every `refresh`), `selectedNode` state, pass `history` to `RiskGauge`, `onSelect` to `Graph`, selected chip shows `type risk mitre platform`, evidence/graph counts show `selectedNode` where applicable
+
+#### Verified
+- `pytest` 95/95 still passing (no backend change)
+- Manual: Timeline search filters live events, RiskGauge sparkline renders after 2+ runs, Graph click shows selected chip
 
 ### 2026-08-28 — Harden & Persist (MinIO + Redis)
 

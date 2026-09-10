@@ -50,7 +50,9 @@ export default function App(){
   const refresh = async (cid:number)=>{
     try{
       const r = await fetch(`${API}/api/cases/${cid}/risk`).then(r=>r.json())
-      setRisk(r.risk ?? 0)
+      const nr = r.risk ?? 0
+      setRisk(nr)
+      setRiskHistory(h=> [...h.slice(-19), nr])
       const t = await fetch(`${API}/api/cases/${cid}/timeline`).then(r=>r.json())
       setTimeline(t.timeline || [])
       const g = await fetch(`${API}/api/cases/${cid}/graph`).then(r=>r.json())
@@ -99,6 +101,8 @@ export default function App(){
   }
 
   const [runPlatform, setRunPlatform] = useState<string>("linux")
+  const [riskHistory, setRiskHistory] = useState<number[]>([0])
+  const [selectedNode, setSelectedNode] = useState<string | null>(null)
 
   const runExecute = async ()=>{
     setLoading(true); setError("")
@@ -227,8 +231,9 @@ export default function App(){
       <div className="grid grid-cols-12 gap-6">
         <div className="col-span-8 bg-zinc-900 rounded-xl p-4 border border-zinc-800">
           <h2 className="font-semibold mb-2">Evidence Knowledge Graph (React Flow) — Live</h2>
-          <p className="text-xs text-zinc-500 mb-2">Host → Evidence nodes (op/type) → Finding • MITRE {graph.mitre?.join(', ')||'T1055/T1068'} • {graph.nodes?.length||0} nodes {filteredEvidence.length}/{evidence.length} evidence {platformFilter!=='all' ? `· platform=${platformFilter}`:''}</p>
-          <Graph data={graph} />
+          <p className="text-xs text-zinc-500 mb-2">Host → Evidence nodes (op/type) → Finding • MITRE {graph.mitre?.join(', ')||'T1055/T1068'} • {graph.nodes?.length||0} nodes {filteredEvidence.length}/{evidence.length} evidence {platformFilter!=='all' ? `· platform=${platformFilter}`:''} {selectedNode?`· selected ${selectedNode}`:''}</p>
+          <Graph data={graph} onSelect={setSelectedNode} />
+          {selectedNode && <div className="mt-2 text-xs bg-zinc-950 p-2 rounded border border-violet-700">Selected: <span className="text-violet-400">{selectedNode}</span> {(() => { const ev = evidence.find((x:any)=> x.id===selectedNode); if(!ev) return `— graph node`; const p=ev.payload||{}; return `· ${ev.type} risk ${ev.risk} · ${p.mitre||''} ${p.platform||''}` })()} <button onClick={()=> setSelectedNode(null)} className="ml-2 underline">clear</button></div>}
           {evidence.length>0 && <div className="mt-3 text-xs"><div className="font-semibold mb-1">Evidence store (case {caseId}) — canonical envelope schema_version 1 + integrity SHA256 {filteredEvidence.length!==evidence.length?`· filtered ${filteredEvidence.length}/${evidence.length}`:''}:</div>
             <div className="space-y-1 max-h-52 overflow-auto bg-zinc-950 p-2 rounded border border-zinc-800">
               {filteredEvidence.slice(-8).map((e:any)=>{
@@ -243,7 +248,7 @@ export default function App(){
           </div>}
         </div>
         <div className="col-span-4 space-y-4">
-          <RiskGauge risk={risk} />
+          <RiskGauge risk={risk} history={riskHistory} />
           <div className="bg-zinc-900 rounded-xl p-4 border border-zinc-800">
             <div className="flex justify-between items-center"><h3 className="font-semibold">Findings — Live</h3><button onClick={downloadReport} disabled={loading} className="text-xs bg-violet-600 hover:bg-violet-500 px-3 py-1 rounded disabled:opacity-50">📄 Report PDF</button></div>
             {findings.length===0 ? <p className="text-sm text-zinc-500 mt-2">No findings yet — Run a sweep then download report.</p> :

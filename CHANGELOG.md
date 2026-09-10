@@ -6,6 +6,14 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/) and [Sem
 
 ## [Unreleased]
 
+## 2026-08-28 — Dashboard Enrichment — Timeline Search + Risk History + Graph Select
+
+### Added
+- `frontend/src/components/Timeline.tsx` — search `q` + `minRisk` filter (≥30/≥60/≥80) + filtered count + click handler
+- `frontend/src/components/RiskGauge.tsx` — `history` sparkline SVG (last 20) + LOW level + correct weights
+- `frontend/src/components/Graph.tsx` — `onSelect` + `onNodeClick`
+- `frontend/src/App.tsx` — `riskHistory` + `selectedNode` wiring, chip shows `type risk mitre platform`
+
 ## 2026-08-28 — Case Isolation UI — Cases + Host/Platform Filters (95 tests)
 
 ### Added
