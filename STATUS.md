@@ -65,7 +65,8 @@ Build a safe, reproducible, defensive forensic investigation platform around the
 | Controlled laboratory   | 🟢 Verified     | 6 fixtures + live poly demo (3 IRs same YARA cluster) + full-sweep cases + report + `POST /api/cases` isolation (5 tests) |
 | End-to-end workflow     | 🟢 Verified     | Full sweep → envelope → YARA → Timeline/Graph/Risk→Report persists (Point 1+2) |
 | Dashboard               | 🟢 Verified     | **Case isolation + enrichment** `App.tsx` `caseId` dropdown + `hostFilter`/`typeFilter`/`platformFilter` + `runPlatform` + `filteredEvidence` + **Timeline search/risk filter** + **Risk history sparkline** + **Graph node select** — per FORENSICS §7 + ARCHITECTURE §11 + DESIGN §41 |
-| Automated tests         | 🟢 Verified     | **98 tests** (compiler 9, backend 13, e2e 3, forensic 6, report 4, yara 6, agent 8, grammar 12, platform 10, detection 11, storage 8, isolation 5, report-harden 3) all passing |
+| Automated tests         | 🟢 Verified     | **104 tests** (compiler 9, backend 13, e2e 3, forensic 6, report 4, yara 6, agent 8, grammar 12, platform 10, detection 11, storage 8, isolation 5, report-harden 3, correlation 6) all passing |
+| Correlation engine      | 🟢 Verified     | **Enriched** `GET /api/cases/{id}/graph` → `correlations` (temporal 0.6, pid 0.8, process→file 0.85, process→net 0.9, supports 0.95) + `weight` on edges, `correlation_count`, platform on nodes — per ARCHITECTURE §14 + FORENSICS §43 (6 tests) |
 
 ---
 
@@ -347,6 +348,15 @@ Progressively add operations per LANGUAGE_SPEC.md §10, each with capability, sy
 
 #### Verified
 - `pytest` 95/95 (5 new) — case isolation verified via TestClient (evidence all `case_id==nid`, timeline/graph/risk isolated, `GET /api/cases` count grows, platform windows vs linux both present in same case)
+
+### 2026-08-28 — Correlation Enrichment (Temporal + PID + Platform)
+
+#### Added
+- `backend/app/main.py` `GET /api/cases/{id}/graph` enriched per ARCHITECTURE §14 + FORENSICS §43: builds `pid→evidence` map, `nodes` now `platform` field, `edges` now `weight` (0.5-0.95) + `reason`, `correlations` list (`process→file` 0.85, `process→net` 0.9, `temporal` <120s 0.6, `pid` 0.8, `supports` 0.95), `correlation_count`, platform-aware labels
+- `tests/test_correlation.py` (6) — full sweep has ≥2 correlations (process→file/net/temporal), temporal window <120s, pid sharing, mitre/platform preserved, edges weight ∈(0,1], confidence ∈(0,1] + reason
+
+#### Verified
+- `pytest` 104/104 (6 new)
 
 ### 2026-08-28 — Report Hardening (Versioned History)
 
