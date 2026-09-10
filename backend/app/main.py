@@ -265,57 +265,61 @@ def validate_path(path: str):
         if "passwd" in path or "shadow" in path or "windows/system32/config" in path.lower():
             raise ValueError(f"Path rejected: {path!r} — outside allowed evidence roots")
 
-def make_envelope(op: str, agent_id: str, host_id: str, case_id: int, ir_hash: str, source_hash: str, caps: List[str], source: str = ""):
+def _platform_provider_payload(op: str, platform: str, host_id: str, agent_id: str, source: str = "") -> tuple[Dict[str, Any], str]:
+    """Dispatch to Windows vs Linux provider per ARCHITECTURE.md §8 + DESIGN.md §22 — keep JOCKY language platform-agnostic (LANGUAGE_SPEC §27)."""
+    try:
+        from .providers.factory import get_providers
+        sys_p, proc_p, file_p, net_p, drv_p = get_providers(platform)
+    except Exception:
+        return {}, "generic"
+    if op == "system.info":
+        return sys_p.collect(host_id), "system"
+    if op.startswith("process."):
+        procs = proc_p.list_processes(host_id)
+        # keep Sigma correlation for demo (same across platforms per FORENSICS_SPEC §43)
+        return {"type": "process", "processes": procs, "count": len(procs), "note": f"synthetic {platform} — correlated tree per LANGUAGE_SPEC process.list; ppid anomaly flagged per Sigma jocky-001", "sigma_rule": "jocky-001", "mitre": "T1055", "platform": platform}, "process"
+    if op.startswith("file."):
+        raw_path = extract_file_arg(source, op) or ("/evidence/sample.exe" if platform=="linux" else "C:\\Evidence\\sample.exe")
+        validate_path(raw_path)
+        data = file_p.hash_file(raw_path, host_id)
+        data["mitre"] = "T1105" if data.get("yara_hit") else None
+        data["note"] = f"synthetic {platform} file op via {data.get('source_adapter','provider')} — no real filesystem read (safe)"
+        return data, "file"
+    if op.startswith("network."):
+        conns = net_p.list_connections(host_id)
+        return {"type": "network", "connections": conns, "count": len(conns), "note": f"synthetic {platform} — no raw socket capture", "mitre": "T1071", "platform": platform}, "network"
+    if op.startswith("driver."):
+        drv = drv_p.scan(host_id)
+        return {"type": "driver", "driver": drv, "note": f"synthetic {platform}", "platform": platform}, "driver"
+    return {}, "generic"
+
+def make_envelope(op: str, agent_id: str, host_id: str, case_id: int, ir_hash: str, source_hash: str, caps: List[str], source: str = "", platform: str = None):
     now = datetime.datetime.utcnow().isoformat()+"Z"
     # use total count from DB if available, else in-memory, to keep EV ids unique across restarts
     total = len(_get_evidence())
     eid = f"EV-{datetime.datetime.utcnow().strftime('%Y%m%d')}-{total+1:06d}"
     t = op.split(".")[0] if "." in op else op
-    payload: Dict[str, Any] = {"jocky_op": op, "ir_hash": ir_hash, "source_hash": source_hash}
-    if op == "system.info":
-        payload.update({"type": "system", "hostname": host_id, "os": "linux", "arch": "x86_64", "kernel": "5.15-jocky", "jocky_version": "1.0", "agent_id": agent_id, "boot_time": "2026-08-28T00:00:00Z", "timezone": "UTC"})
+    # Platform dispatch per ARCHITECTURE.md §8 — JOCKY language platform-agnostic, provider chosen here
+    if platform is None:
+        try:
+            from .providers.factory import detect_platform
+            platform = detect_platform()
+        except Exception:
+            platform = "linux"
+    payload: Dict[str, Any] = {"jocky_op": op, "ir_hash": ir_hash, "source_hash": source_hash, "platform": platform}
+    # Try provider first
+    prov_payload, prov_type = _platform_provider_payload(op, platform, host_id, agent_id, source)
+    if prov_payload:
+        payload.update(prov_payload)
+        ev_type = prov_type
+    elif op == "system.info":
+        payload.update({"type": "system", "hostname": host_id, "os": platform, "arch": "x86_64", "kernel": f"5.15-jocky-{platform}", "jocky_version": "1.0", "agent_id": agent_id, "boot_time": "2026-08-28T00:00:00Z", "timezone": "UTC", "platform": platform})
         ev_type = "system"
-    elif op.startswith("process."):
-        # richer correlated process tree per FORENSICS_SPEC §11-12
-        processes = [
-            {"pid": 1, "ppid": 0, "name": "systemd", "path": "/sbin/init", "user": "root", "creation_time": "2026-08-28T10:30:00Z", "risk": 0},
-            {"pid": 1234, "ppid": 1, "name": "explorer.exe", "path": "C:\\Windows\\explorer.exe", "user": "analyst", "creation_time": "2026-08-28T10:31:00Z", "ppid_anomaly": False, "risk": 10},
-            {"pid": 5678, "ppid": 1234, "name": "svchost.exe", "path": "C:\\Windows\\System32\\svchost.exe", "user": "SYSTEM", "creation_time": "2026-08-28T10:32:03Z", "ppid_anomaly": True, "risk": 35, "sigma_hit": "jocky-001 Parent Anomaly (T1055)"},
-            {"pid": 9012, "ppid": 5678, "name": "malware.exe", "path": "C:\\Temp\\malware.exe", "user": "analyst", "creation_time": "2026-08-28T10:31:45Z", "parent": 5678, "risk": 75, "yara_hit": "JOCKY_DEMO_MARKER"},
-        ]
-        payload.update({"type": "process", "processes": processes, "count": len(processes), "note": "synthetic - correlated tree per LANGUAGE_SPEC process.list; ppid anomaly flagged per Sigma jocky-001", "sigma_rule": "jocky-001", "mitre": "T1055"})
-        ev_type = "process"
-    elif op.startswith("file."):
-        raw_path = extract_file_arg(source, op) or "/evidence/sample.exe"
-        validate_path(raw_path)
-        sha = hashlib.sha256(raw_path.encode()).hexdigest()
-        low = raw_path.lower()
-        is_suspicious = any(k in low for k in ("suspicious","sample.exe","malware","evil","payload","implant"))
-        payload.update({
-            "type": "file", "path": raw_path, "name": raw_path.split("/")[-1].split("\\")[-1],
-            "size": 1048576 if is_suspicious else 2048, "file_type": "PE32 executable" if raw_path.endswith(".exe") else "text",
-            "creation_time": "2026-08-28T10:31:12Z", "modification_time": "2026-08-28T10:31:12Z",
-            "hashes": {"sha256": sha, "sha512": hashlib.sha512(raw_path.encode()).hexdigest()[:64]},
-            "sha256": sha, "yara_hit": "JOCKY_DEMO_MARKER" if is_suspicious else None,
-            "sigma_hit": None, "mitre": "T1105" if is_suspicious else None,
-            "note": "synthetic file op — no real filesystem read (safe)"
-        })
-        ev_type = "file"
-    elif op.startswith("network."):
-        conns = [
-            {"local_address": "192.0.2.10", "local_port": 49152, "remote_address": "192.0.2.20", "remote_port": 443, "protocol": "TCP", "state": "ESTABLISHED", "pid": 9012, "process_name": "malware.exe", "observed_at": "2026-08-28T10:32:45Z", "risk": 80, "note": "C2 beacon"},
-            {"local_address": "192.0.2.10", "local_port": 5353, "remote_address": "224.0.0.251", "remote_port": 5353, "protocol": "UDP", "state": "LISTEN", "pid": 5678, "process_name": "svchost.exe", "observed_at": "2026-08-28T10:30:00Z", "risk": 0},
-        ]
-        payload.update({"type": "network", "connections": conns, "count": len(conns), "note": "synthetic — no raw socket capture", "mitre": "T1071"})
-        ev_type = "network"
-    elif op.startswith("driver."):
-        payload.update({"type": "driver", "driver": {"name": "RTCore64.sys", "version": "1.0.0", "path": "C:\\Windows\\System32\\drivers\\RTCore64.sys", "publisher": "Micro-Star International", "signature_status": "unsigned", "vulnerable": False, "loldrivers_hit": False, "note": "synthetic scan — no .sys loaded"}, "note": "synthetic"})
-        ev_type = "driver"
     elif op.startswith("memory."):
-        payload.update({"type": "memory", "memory": {"hollowed": False, "note": "synthetic - no dump read"}, "note": "synthetic"})
+        payload.update({"type": "memory", "memory": {"hollowed": False, "note": "synthetic - no dump read", "platform": platform}, "note": "synthetic", "platform": platform})
         ev_type = "memory"
     else:
-        payload.update({"type": t, "note": "synthetic generic"})
+        payload.update({"type": t, "note": "synthetic generic", "platform": platform})
         ev_type = t
     raw = json.dumps(payload, sort_keys=True).encode()
     sha = hashlib.sha256(raw).hexdigest()
@@ -362,6 +366,7 @@ class RunRequest(BaseModel):
     case_id: int = 1
     polymorphic: bool = False
     seed: int = 0
+    platform: Optional[str] = Field(None, description="Target platform: windows|linux — explicit per LANGUAGE_SPEC §27, otherwise auto-detect via providers/factory.py")
 
 def calc_risk(payload: dict) -> int:
     r=0
@@ -528,11 +533,15 @@ def run_source(req: RunRequest):
     ir_hash = hashlib.sha256(ir.encode()).hexdigest()[:12]
     ensure_case(req.case_id)
     created = []
+    # Platform resolution per ARCHITECTURE.md §8 (same JOCKY, different adapter)
+    platform = (req.platform or "").lower() if req.platform else None
+    if platform not in ("windows","linux", None, ""):
+        raise HTTPException(status_code=400, detail=f"Invalid platform {req.platform!r} — expected windows|linux")
     for op in ops:
         if op == "nop":
             continue
         try:
-            rec = make_envelope(op, req.agent_id, req.host_id, req.case_id, ir_hash, src_hash, caps, req.source)
+            rec = make_envelope(op, req.agent_id, req.host_id, req.case_id, ir_hash, src_hash, caps, req.source, platform)
         except ValueError as ve:
             raise HTTPException(status_code=400, detail=str(ve))
         _add_evidence(rec)
@@ -543,7 +552,7 @@ def run_source(req: RunRequest):
         frec = {"id": fid, "case_id": req.case_id, "evidence_id": rec["id"], "rule": op, "severity": "INFO" if rec["risk"] <30 else "HIGH" if rec["risk"]<80 else "CRITICAL", "risk": rec["risk"], "mitre": mitre}
         _add_finding(frec)
     if not created:
-        rec = make_envelope("system.info", req.agent_id, req.host_id, req.case_id, ir_hash, src_hash, caps, req.source)
+        rec = make_envelope("system.info", req.agent_id, req.host_id, req.case_id, ir_hash, src_hash, caps, req.source, platform)
         rec["payload"]["note"] = "nop run — synthetic placeholder"
         _add_evidence(rec)
         created.append(rec)
