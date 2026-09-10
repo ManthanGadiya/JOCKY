@@ -6,6 +6,16 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/) and [Sem
 
 ## [Unreleased]
 
+## 2026-08-28 — Compiler Grammar-Wired — Lexer/Parser per g4 replaces RE_CALL
+
+### Added
+- `tools/jocky_lexer.py` — `lex()` per `grammar/jocky.g4` + `jocky/src/Lexer.cpp` (ID/DOT/LPAREN/RPAREN/SEMI/COMMA/STRING/NUMBER/OP/KW/END, WS/COMMENT skip, line:col), `parse_member_calls()` per g4 `MemberCall`, `validate_and_collect()` with `at line:col` fail-closed errors, syntax checks for unterminated string / unmatched '('; single-source `OP_CAPS`
+- `tools/jockyc.py` + `backend/app/main.py` — now both import `jocky_lexer` (single source; removes `RE_CALL` regex); `.tokens` real dump, `.ast` calls+tokens
+- `tests/test_compiler_grammar.py` (12) — lex, comment/string, keywords, extract, syntax errors, whitelist, dedup, g4 coverage, jockyc+backend integration
+
+### Verified
+- `pytest` 61/61 (12 new) — both host fallback and backend reject `edr.disable()` with `at 1:1` location
+
 ## 2026-08-28 — Agent Real POST via Nginx — Layer 4 → L5 → L6
 
 ### Added
