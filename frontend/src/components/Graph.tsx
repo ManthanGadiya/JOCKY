@@ -33,10 +33,10 @@ function toFlow(data:any){
   return {nodes, edges, isDemo:false}
 }
 
-export default function Graph({data}:{data?:any}){
+export default function Graph({data, onSelect}:{data?:any, onSelect?:(id:string)=>void}){
   const flow = toFlow(data)
   return <div style={{height:320}}>
     {flow.isDemo && <div className="text-xs text-zinc-500 mb-1">Demo fallback — Run system.info(); to populate live graph</div>}
-    <ReactFlow nodes={flow.nodes} edges={flow.edges} fitView><Background/><Controls/></ReactFlow>
+    <ReactFlow nodes={flow.nodes} edges={flow.edges} fitView onNodeClick={(_,n)=> onSelect?.(n.id)}><Background/><Controls/></ReactFlow>
   </div>
 }

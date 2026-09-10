@@ -1,5 +1,8 @@
+import { useState } from 'react'
 type Evt = { id?:string, timestamp?:string|number, type?:string, op?:string, payload?:any, risk?:number, host_id?:string, agent_id?:string }
 export default function Timeline({events}:{events?:Evt[]}){
+  const [q, setQ] = useState("")
+  const [minRisk, setMinRisk] = useState(0)
   if(!events || events.length===0){
     const fallback = [
       { t:"10:30:00", src:"log", msg:"User analyst login (WIN-001)", risk:0 },
@@ -11,10 +14,28 @@ export default function Timeline({events}:{events?:Evt[]}){
     return (<div><div className="text-xs text-zinc-500 mb-2">Demo fallback — no live evidence yet. Run system.info(); to populate.</div>
       <div className="flex gap-2 overflow-x-auto py-2">{fallback.map(e=><div key={e.t} className="min-w-[180px] bg-zinc-800 rounded-lg p-3 border border-zinc-700"><div className="text-xs text-violet-400">{e.t} • {e.src}</div><div className="text-sm mt-1">{e.msg}</div><div className="text-xs mt-1 text-red-400">Risk {e.risk}</div></div>)}</div></div>)
   }
-  return <div className="flex gap-2 overflow-x-auto py-2">{events.map((e,i)=><div key={e.id||i} className="min-w-[220px] bg-zinc-800 rounded-lg p-3 border border-zinc-700">
+  const filtered = events.filter(e=>{
+    if(minRisk>0 && (e.risk??0) < minRisk) return false
+    if(!q) return true
+    const hay = `${e.id||''} ${e.type||''} ${e.op||''} ${e.host_id||''} ${e.agent_id||''} ${JSON.stringify(e.payload||'').slice(0,400)}`.toLowerCase()
+    return hay.includes(q.toLowerCase())
+  })
+  return <div>
+    <div className="flex gap-2 mb-2">
+      <input value={q} onChange={e=> setQ(e.target.value)} placeholder="Search timeline (id/type/op/host/mitre)..." className="flex-1 bg-zinc-950 border border-zinc-700 rounded px-2 py-1 text-xs" />
+      <select value={minRisk} onChange={e=> setMinRisk(Number(e.target.value))} className="bg-zinc-950 border border-zinc-700 rounded px-2 py-1 text-xs">
+        <option value={0}>all risk</option>
+        <option value={30}>≥30 MEDIUM</option>
+        <option value={60}>≥60 HIGH</option>
+        <option value={80}>≥80 CRITICAL</option>
+      </select>
+      <span className="text-xs text-zinc-500 self-center">{filtered.length}/{events.length}</span>
+    </div>
+    <div className="flex gap-2 overflow-x-auto py-2">{filtered.map((e,i)=><div key={e.id||i} className="min-w-[220px] bg-zinc-800 rounded-lg p-3 border border-zinc-700 hover:border-violet-600 cursor-pointer" onClick={()=> alert(`${e.id} r=${e.risk} op=${e.op} host=${e.host_id}`)}>
     <div className="text-xs text-violet-400">{String(e.timestamp||'').slice(0,19)} • {e.op||e.type}</div>
     <div className="text-sm mt-1">{e.id} — {e.type} {e.op}</div>
-    <div className="text-xs mt-1 text-zinc-400">{e.host_id||e.agent_id}</div>
-    <div className="text-xs mt-1 text-red-400">Risk {e.risk??0}</div>
+    <div className="text-xs mt-1 text-zinc-400">{e.host_id||e.agent_id} {e.payload?.platform? `· ${e.payload.platform}`:''}</div>
+    <div className="text-xs mt-1" style={{color: (e.risk??0)>60 ? '#f87171' : '#a3a3a3'}}>Risk {e.risk??0} {e.payload?.mitre? `· ${e.payload.mitre}`:''}</div>
   </div>)}</div>
+  </div>
 }

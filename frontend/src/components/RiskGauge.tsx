@@ -1,10 +1,22 @@
-export default function RiskGauge({risk}:{risk:number}){
+export default function RiskGauge({risk, history}:{risk:number, history?:number[]}){
   const pct = Math.min(risk,100)
   const color = pct>80?'#dc2626':pct>60?'#f59e0b':'#22c55e'
+  const hist = (history && history.length>1) ? history.slice(-20) : []
+  const max = Math.max(...hist, 100)
+  const spark = hist.length>1 ? (()=> {
+    const w=120,h=28,pad=2
+    const pts = hist.map((v,i)=>{
+      const x = pad + (i/(hist.length-1))*(w-pad*2)
+      const y = h - pad - (v/max)*(h-pad*2)
+      return `${x},${y}`
+    }).join(' ')
+    return <svg width={w} height={h} className="border border-zinc-800 rounded bg-zinc-950"><polyline fill="none" stroke={color} strokeWidth={1.8} points={pts} /></svg>
+  })() : null
   return <div className="bg-zinc-900 rounded-xl p-4 border border-zinc-800">
     <h3 className="font-semibold">Risk Score 0-100 (Behavioral)</h3>
-    <div className="mt-3 h-4 bg-zinc-800 rounded-full overflow-hidden"><div className="h-full" style={{width: pct+'%', background: color}} /></div>
-    <div className="text-3xl font-bold mt-2" style={{color}}>{pct}/100 <span className="text-sm font-normal text-zinc-400">{pct>80?'CRITICAL':pct>60?'HIGH':'MEDIUM'}</span></div>
-    <div className="text-xs text-zinc-500 mt-1">Weighted: PPID*30 + hollowed*40 + driver_vuln*30 (no hash reliance)</div>
+    <div className="mt-3 h-4 bg-zinc-800 rounded-full overflow-hidden"><div className="h-full transition-all" style={{width: pct+'%', background: color}} /></div>
+    <div className="text-3xl font-bold mt-2" style={{color}}>{pct}/100 <span className="text-sm font-normal text-zinc-400">{pct>80?'CRITICAL':pct>60?'HIGH':pct>30?'MEDIUM':'LOW'}</span></div>
+    <div className="text-xs text-zinc-500 mt-1">Weighted: PPID*30 + hollowed*40 + driver*15 + yara*20 + C2*30 (hash≠detection)</div>
+    {spark && <div className="mt-2"><div className="text-xs text-zinc-500">History (last {hist.length})</div>{spark}</div>}
   </div>
 }
