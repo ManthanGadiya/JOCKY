@@ -61,9 +61,10 @@ Build a safe, reproducible, defensive forensic investigation platform around the
 | Storage                 | 🟢 Verified     | **MinIO** `storage.py` (`put_report`/`get_report`/`put_evidence_artifact`/`put_bytes`/`get_bytes`, bucket auto-create, mem fallback) — 8 tests |
 | Windows support         | 🟢 Verified     | **Synthetic Windows** `Windows*Provider` (WinAPI-style paths `C:\Windows\...`, `uid`→`SYSTEM`, `command_line`) — same Sigma T1055 preserved — verified via `platform=windows` contract tests |
 | Linux support           | 🟢 Verified     | **Synthetic Linux** `Linux*Provider` (`/proc`-style `/usr/bin/...`, `uid`, `inode`, `lsmod`) — same normalized contract — verified via `platform=linux` — 10 tests |
-| Controlled laboratory   | 🟢 Verified     | 6 fixtures + live poly demo (3 IRs same YARA cluster) + full-sweep cases + report |
+| Controlled laboratory   | 🟢 Verified     | 6 fixtures + live poly demo (3 IRs same YARA cluster) + full-sweep cases + report + `POST /api/cases` isolation (5 tests) |
 | End-to-end workflow     | 🟢 Verified     | Full sweep → envelope → YARA → Timeline/Graph/Risk→Report persists (Point 1+2) |
-| Automated tests         | 🟢 Verified     | **90 tests** (compiler 9, backend 13, e2e 3, forensic 6, report 4, yara 6, agent 8, grammar 12, platform 10, detection 11, storage 8) all passing |
+| Dashboard               | 🟢 Verified     | **Case isolation UI** `App.tsx` `caseId` dropdown + `hostFilter`/`typeFilter`/`platformFilter` + `+ New Case` + `runPlatform` selector + `filteredEvidence` — per FORENSICS §7 + ARCHITECTURE §11 |
+| Automated tests         | 🟢 Verified     | **95 tests** (compiler 9, backend 13, e2e 3, forensic 6, report 4, yara 6, agent 8, grammar 12, platform 10, detection 11, storage 8, isolation 5) all passing |
 
 ---
 
@@ -181,14 +182,15 @@ Every stage must eventually be independently testable.
 * **Platform providers** `backend/app/providers/` per ARCHITECTURE §8 + DESIGN §22 — `base.py` `ISystem/IProcess/IFile/INetwork/IDriverProvider`, `windows.py` (WinAPI synthetic `C:\Windows\...`), `linux.py` (`/proc` synthetic `uid/inode/lsmod`), `factory.py` `get_providers(platform)` + `detect_platform()` + `platform_from_request()`; `backend/app/main.py` `make_envelope(..., platform)` dispatches via `_platform_provider_payload()`, `RunRequest.platform` field, same JOCKY → same MITRE `T1105/T1055` but different `platform` + path/uid per FORENSICS §67; 10 `test_platform_providers` contract tests
 * **Detection depth** `backend/app/detection_engine.py` per ARCHITECTURE §13 + FORENSICS §31 — `load_sigma_rules()` (yaml + fallback), `sigma_scan()` (jocky-001 ppid anomaly, jocky-002 BYOVD), `behavioral_scan()` (13 weights: ppid/hollowed/unbacked/reflective/vuln/yara/sigma/C2), `detect()` + `risk_for_payload()`; `yara/rules.yar` expanded to 5 rules (`File_Suspicious_PE` T1105, `Network_C2_Beacon` T1071) + `backend/app/main.py` fallback strings for new rules; `backend/requirements.txt` adds `pyyaml`; 11 `test_detection_depth` tests
 * **Harden & Persist** `backend/app/storage.py` + `cache.py` per ARCHITECTURE §11 + FORENSICS §64 — `storage.py` MinIO `jocky-reports`/`jocky-evidence` buckets (auto-create, fallback mem, `put_report/get_report/put_bytes/get_bytes`), `cache.py` Redis `cache_get/set/invalidate` (TTL, fallback mem); `backend/app/main.py` now `GET /health` includes `minio`/`redis` + `GET /api/storage/status`, `POST /api/artifacts/upload` (5MB 413 per SECURITY_MODEL §28) + `GET /api/artifacts/{key}`, `POST /api/evidence` → MinIO artifact, `GET /api/cases/{id}/report` → MinIO + Redis `X-Report-Cached`; 8 `test_storage` tests
-* **Tests** 90/90: 9+13+3+6+4+6+8+12+10+11+8 (compiler/backend/e2e/forensic/report/yara/agent/grammar/platform/detection/storage)
-* **Docker** 9 Up: backend (pango+PG+yara 4.5.2 + 5 rules + minio/redis status) :8000, frontend :3000, nginx 8082, `agent` real POST via nginx, db healthy pgdata+miniodata persisting
+* **Case isolation UI** `frontend/src/App.tsx` + `backend/app/main.py` `POST /api/cases` per FORENSICS §7 + ARCHITECTURE §11 — `App.tsx` adds case dropdown (from `/api/cases`), `+ New Case` button, `hostFilter`/`typeFilter`/`platformFilter` selectors + `runPlatform` for `POST /api/run`, `filteredEvidence` derived, header+evidence/graph counts reflect filtered; backend `POST /api/cases` auto-increment id; 5 `test_case_isolation` tests (create+isolation, list grows, host/platform filters, UI presence)
+* **Tests** 95/95: 9+13+3+6+4+6+8+12+10+11+8+5 (compiler/backend/e2e/forensic/report/yara/agent/grammar/platform/detection/storage/isolation)
+* **Docker** 9 Up: backend (pango+PG+yara 4.5.2 + 5 rules + minio/redis) :8000, frontend :3000 (+ case isolation UI), nginx 8082, `agent` real POST via nginx, db healthy pgdata+miniodata persisting
 
 ### Still Pending / Not Verified
 
 * AST visitor / full block/funcDecl control-flow (grammar has them, IR only emits MemberCall ops)
-* Dashboard case isolation UI + host selector (next milestone per ROADMAP §15)
 * Real WinAPI/ETW `/proc` live collection (beyond synthetic — lab remains synthetic per SECURITY_MODEL §47)
+* Dashboard richer filters (timeline search, graph expand, risk history — per DESIGN §41)
 
 ---
 
@@ -328,12 +330,22 @@ Progressively add operations per LANGUAGE_SPEC.md §10, each with capability, sy
 12. ✅ Platform providers (IProcess/IFile/INetwork per DESIGN §22, Windows vs Linux factory, same JOCKY → different adapter, normalized schema) — done (10 platform tests, 71 total)
 13. ✅ Detection depth (YARA 3→5 rules + Sigma 2 rules + behavioral engine per FORENSICS §31, mitre/severity/confidence) — done (11 detection tests, 82 total)
 14. ✅ Harden & Persist (MinIO jocky-reports/jocky-evidence + Redis cache per ARCHITECTURE §11, report→MinIO + cache, artifacts) — done (8 storage tests, 90 total)
-15. Case isolation UI (dropdown of cases from /api/cases) + host selector + filter
-16. Real WinAPI/ETW live collection hardening (optional beyond synthetic)
+15. ✅ Case isolation UI (dropdown of cases from /api/cases + host/type/platform filters + New Case + runPlatform) — done (5 isolation tests, 95 total)
+16. Dashboard richer filters (timeline search, graph expand) + hardening per SECURITY_MODEL §41 (optional)
 
 ---
 
 # 11. Recent Changes
+
+### 2026-08-28 — Case Isolation UI (Cases + Host/Platform Filters)
+
+#### Added
+- `backend/app/main.py` — `CaseCreate` + `POST /api/cases` (auto-increment id per ARCHITECTURE §10, returns `case/id/title`) — evidence already isolated via `case_id` param but now explicit creation per `POST /api/run` flow
+- `frontend/src/App.tsx` — case isolation bar per FORENSICS §7 + ARCHITECTURE §11: `caseId` dropdown (from `GET /api/cases`), `+ New Case` button (`POST /api/cases`), `hostFilter`/`typeFilter`/`platformFilter` selectors derived from `evidence` hosts, `runPlatform` selector (`linux`/`windows`) for `POST /api/run`, `filteredEvidence` derivation, filtered counts in graph/evidence panels, platform badge per evidence row
+- `tests/test_case_isolation.py` (5) — create+isolation (evidence/timeline/graph/risk all `case_id==nid`), list grows, host filter, platform preserved per case (windows+linux both present), UI presence checks (caseId/hostFilter/filteredEvidence)
+
+#### Verified
+- `pytest` 95/95 (5 new) — case isolation verified via TestClient (evidence all `case_id==nid`, timeline/graph/risk isolated, `GET /api/cases` count grows, platform windows vs linux both present in same case)
 
 ### 2026-08-28 — Harden & Persist (MinIO + Redis)
 

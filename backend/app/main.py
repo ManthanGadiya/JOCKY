@@ -518,6 +518,19 @@ def list_cases():
     evs = _get_evidence()
     return {"cases": cs, "count": len(cs), "evidence": len(evs), "db": _db_available()}
 
+class CaseCreate(BaseModel):
+    title: Optional[str] = ""
+    host_id: Optional[str] = "HOST-001"
+
+@app.post("/api/cases")
+def create_case(req: CaseCreate):
+    # Create new case with auto-increment id per ARCHITECTURE §10 case management
+    cs = _get_cases()
+    next_id = max([c.get("id",0) for c in cs], default=0) + 1
+    rec = _add_case(next_id, title=req.title or f"case-{next_id}")
+    # also ensure host association if provided
+    return {"case": rec, "id": next_id, "title": rec.get("title")}
+
 @app.post("/api/evidence")
 def post_evidence(ev: Evidence):
     raw = json.dumps(ev.payload, sort_keys=True).encode()

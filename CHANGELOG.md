@@ -6,6 +6,16 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/) and [Sem
 
 ## [Unreleased]
 
+## 2026-08-28 — Case Isolation UI — Cases + Host/Platform Filters (95 tests)
+
+### Added
+- `backend/app/main.py` — `POST /api/cases` (CaseCreate auto-increment, per ARCHITECTURE §10)
+- `frontend/src/App.tsx` — case isolation bar: case dropdown + `+ New Case`, `hostFilter`/`typeFilter`/`platformFilter`, `runPlatform` selector, `filteredEvidence` + filtered counts (FORENSICS §7, ARCHITECTURE §11)
+- `tests/test_case_isolation.py` (5) — create+isolation, list grows, host/platform filters, UI presence
+
+### Verified
+- `pytest` 95/95 (5 new)
+
 ## 2026-08-28 — Harden & Persist — MinIO + Redis (90 tests)
 
 ### Added
