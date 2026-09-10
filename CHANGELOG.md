@@ -6,6 +6,18 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/) and [Sem
 
 ## [Unreleased]
 
+## 2026-08-28 — Agent Real POST via Nginx — Layer 4 → L5 → L6
+
+### Added
+- `agent/agent.py` — stdlib `urllib` real transport: `GET /health` via `http://nginx:80`, `POST /api/evidence` per fixture, `POST /api/run` JOCKY sweep via nginx (same 422/403 fail-closed), verification `GET /evidence?case_id` + `timeline/graph/risk` via nginx, fail-closed demo `edr.disable→422`; env `BACKEND_URL/HOST_ID/CASE_ID/JOCKY_SOURCE/FIXTURE_DIR/AGENT_POLL_SECONDS`, wait-for-nginx loop, idle `sleep 3600` preserving tail semantics
+- `agent/Dockerfile` — `python3-urllib3` + `COPY agent/agent.py` + `CMD ["python3","/app/agent.py","--scan"]` (C++ stub retained)
+- `docker-compose.yml` — `agent` now `HOST_ID/CASE_ID/JOCKY_SOURCE/FIXTURE_DIR/AGENT_POLL_SECONDS=0` + `healthcheck curl -sf http://nginx:80/health`
+- `tests/test_agent.py` (8) — mocked fixture POST, JOCKY 200/422/403, integration `agent_scan_once` via TestClient, compose + Dockerfile asserts
+
+### Verified
+- `pytest` 49/49 (8 new) — `agent_scan_once` integration posts via mocked nginx to real backend, evidence count ≥1, timeline ≥1
+- `docker-compose.yml` `BACKEND_URL=http://nginx:80` + `healthcheck` `http://nginx:80/health` verified
+
 ## 2026-08-28 — YARA Binary — hash ≠ detection (Point 1+2) via yara 4.5.2
 
 ### Added

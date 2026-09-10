@@ -48,7 +48,7 @@ Build a safe, reproducible, defensive forensic investigation platform around the
 | Runtime                 | 🟡 Partial      | Synthetic provider per op (system.info→system envelope); not yet WinAPI/Linux |
 | Forensic adapters       | 🟠 Scaffolded   | Synthetic only; platform abstraction not yet |
 | Evidence model          | 🟢 Verified     | Canonical envelope schema_version 1 + integrity SHA256 + provenance (tested, E2E) |
-| Agent                   | 🟡 Partial      | C++ stub still; harness is POST /api/run (synthetic) — transport via nginx 8082 live |
+| Agent                   | 🟢 Verified     | **Real POST via nginx** `agent/agent.py` → `http://nginx:80` → backend:8000 — `GET /health` via nginx, `POST /api/evidence` per fixture, `POST /api/run` JOCKY sweep + fail-closed 422/403 via nginx (8 tests) |
 | Backend                 | 🟢 Verified     | PG persistence + compile/run + report + yara scan/polymorphic-demo + /evidence|findings (41 tests, health `db:true yara:true`) |
 | Detection engine        | 🟢 Verified     | **YARA 4.5 binary** (`yara` + `rules.yar` → `JOCKY_DEMO_MARKER/BYOVD_RTCore64/Process_Hollowing`) via `yara_scan_content()` + fallback string; `POST /api/detect` now yara-used, plus `POST /api/yara/scan` + `GET /api/yara/status`; polymorphic demo proves hash≠detection |
 | Investigation graph     | 🟢 Verified     | Star host→evidence + process→file/net edges, live ReactFlow |
@@ -61,7 +61,7 @@ Build a safe, reproducible, defensive forensic investigation platform around the
 | Linux support           | 🟡 Partial      | Synthetic provider; Docker verified |
 | Controlled laboratory   | 🟢 Verified     | 6 fixtures + live poly demo (3 IRs same YARA cluster) + full-sweep cases + report |
 | End-to-end workflow     | 🟢 Verified     | Full sweep → envelope → YARA → Timeline/Graph/Risk→Report persists (Point 1+2) |
-| Automated tests         | 🟢 Verified     | **41 tests** (compiler 9, backend 13, e2e 3, forensic 6, report 4, yara 6) all passing |
+| Automated tests         | 🟢 Verified     | **49 tests** (compiler 9, backend 13, e2e 3, forensic 6, report 4, yara 6, agent 8) all passing |
 
 ---
 
@@ -160,9 +160,9 @@ Every stage must eventually be independently testable.
 
 ---
 
-# 7. Currently Verified (2026-08-28 — Postgres Persistence)
+# 7. Currently Verified (2026-08-28 — Agent via Nginx + Postgres Persistence)
 
-### Verified on Host + Docker (evidence logged, 41 tests + live PG + YARA)
+### Verified on Host + Docker (evidence logged, 49 tests + live PG + YARA + Agent via nginx)
 
 * **Host compiler** `tools/jockyc.py` → IR_VERSION=1 — 3 hashes differ + `edr.disable()` → exit 2 fail-closed (9 tests)
 * **Backend API** `backend/app/main.py` v1.2.0 (enriched + PG + YARA) via TestClient **and live on :8000**:
@@ -174,14 +174,15 @@ Every stage must eventually be independently testable.
 * **E2E** `system.info+process+file+net` via `POST /api/run` → live + `test_yara` 6
 * **Dashboard** :3000 — 4-op sweep default + traversal fail + **📄 Report PDF** + **YARA panel** (poly demo: 3 hashes → 1 cluster, hash≠detection)
 * **Report** `GET /report` → 20KB `%PDF` (WeasyPrint pydyf 0.11) verified Docker, HTML fallback host
-* **Tests** 41/41: 9+13+3+6+4+6 (compiler/backend/e2e/forensic/report/yara)
-* **Docker** 9 Up: backend (pango+PG+yara 4.5.2) :8000, frontend (YARA panel) :3000, nginx 8082, db healthy pgdata persisting
+* **Agent via nginx** `agent/agent.py` (stdlib `urllib`) — `GET /health` via `http://nginx:80`, `POST /api/evidence` per `testdata/*.json` fixture, `POST /api/run` JOCKY sweep `system.info+process+file+net` via nginx (same fail-closed 422/403 as direct), `healthcheck` `curl -sf http://nginx:80/health` in compose — 8 tests including integration `agent_scan_once` delegating to TestClient
+* **Tests** 49/49: 9+13+3+6+4+6+8 (compiler/backend/e2e/forensic/report/yara/agent)
+* **Docker** 9 Up: backend (pango+PG+yara 4.5.2) :8000, frontend (YARA panel) :3000, nginx 8082, `agent` real POST via nginx, db healthy pgdata persisting
 
 ### Still Pending / Not Verified
 
 * Real forensic adapter (WinAPI/ETW, /proc) — synthetic only
 * Windows native validation (synthetic IDs only)
-* Agent binary still stub (harness POST /api/run; real agent POST via nginx not yet)
+* Lexer/Parser/AST still stubs (regex whitelist covers spec correctly but not grammar-wired)
 * Redis/MinIO artifact storage not yet wired
 
 ---
@@ -317,13 +318,25 @@ Progressively add operations per LANGUAGE_SPEC.md §10, each with capability, sy
 7. ✅ YARA 4.5 binary (POST /api/yara/scan, GET /api/yara/status, POST /api/yara/polymorphic-demo hash≠detection) + frontend YARA panel — done (6 yara tests)
 8. ✅ Report PDF (WeasyPrint 20KB, frontend 📄 button) — done (4 report tests)
 9. 41 tests — done (9+13+3+6+4+6)
-10. Case isolation UI (dropdown of cases from /api/cases) + host selector + filter
-11. Wire agent binary real POST via nginx (currently harness POST /api/run; make agent Docker actually curl nginx:80)
+10. ✅ Agent real POST via nginx (GET /health, POST /evidence, POST /run + fail-closed via nginx) — done (8 agent tests, 49 total)
+11. Case isolation UI (dropdown of cases from /api/cases) + host selector + filter
 12. Redis/MinIO wiring for artifact storage (currently declared but not used) + WeasyPrint PDF artifact to MinIO (optional)
 
 ---
 
 # 11. Recent Changes
+
+### 2026-08-28 — Agent Real POST via Nginx (Layer 4 → L5 → L6)
+
+#### Added
+- `agent/agent.py` (185 lines, stdlib `urllib` only) — real transport per `ARCHITECTURE.md §7` + `FORENSICS_SPEC.md §56` + `SECURITY_MODEL.md §24`: `GET /health` via `http://nginx:80`, `POST /api/evidence` per `testdata/*.json` fixture (payload preserves integrity per `§26`), `POST /api/run` JOCKY sweep `system.info+process+file+net` via nginx (fail-closed 422 unknown / 403 `memory.analyze` denied via nginx same as direct), `GET /api/evidence?case_id` + `timeline/graph/risk` verification, fail-closed demo `edr.disable → 422`, wait-for-nginx loop (12×2s), env `BACKEND_URL/AGENT_ID/HOST_ID/CASE_ID/FIXTURE_DIR/JOCKY_SOURCE/AGENT_POLL_SECONDS`, idle loop `POLL_SECONDS>0` else `sleep 3600` preserving `tail -f` semantics
+- `agent/Dockerfile` — `python3 python3-urllib3` + `COPY agent/agent.py` + `CMD ["python3","/app/agent.py","--scan"]` (C++ stub retained for reference)
+- `docker-compose.yml` — `agent` env `HOST_ID/HOST-001 CASE_ID=1 JOCKY_SOURCE FIXTURE_DIR AGENT_POLL_SECONDS=0` + `healthcheck curl -sf http://nginx:80/health` (probes nginx per `ARCHITECTURE.md §21`)
+- `tests/test_agent.py` (8) — import/helpers, mocked fixture POST, JOCKY success, unknown 422, denied 403, integration `agent_scan_once` delegating to `TestClient` (verifies evidence persisted PG), compose uses nginx, Dockerfile uses python via nginx
+
+#### Verified
+- Host `pytest` 49/49 (8 new agent tests)
+- `agent_scan_once` integration: `GET /health` via nginx → ok `db:true yara:true`, fixtures posted, JOCKY sweep 4 evidence via nginx, timeline/graph/risk verified via nginx in same test
 
 ### 2026-08-28 — YARA Binary
 

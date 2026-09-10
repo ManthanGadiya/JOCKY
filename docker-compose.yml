@@ -10,9 +10,10 @@ services:
     build: { context: ., dockerfile: agent/Dockerfile }
     image: jocky/agent:1.0
     volumes: ["./testdata:/app/testdata:ro"]
-    environment: [BACKEND_URL=http://nginx:80, AGENT_ID=WIN-001]
+    environment: [BACKEND_URL=http://nginx:80, AGENT_ID=WIN-001, HOST_ID=HOST-001, CASE_ID=1, JOCKY_SOURCE=system.info();process.list();file.hash("/evidence/sample.exe");network.connections();, FIXTURE_DIR=/app/testdata, AGENT_POLL_SECONDS=0]
     depends_on: [backend, nginx]
     networks: [jocky-net]
+    healthcheck: { test: ["CMD-SHELL", "curl -sf http://nginx:80/health || exit 1"], interval: 30s, retries: 3, start_period: 15s }
   backend:
     build: { context: ./backend }
     image: jocky/backend:1.0
