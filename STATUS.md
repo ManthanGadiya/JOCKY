@@ -50,7 +50,7 @@ Build a safe, reproducible, defensive forensic investigation platform around the
 | Evidence model          | 🟢 Verified     | Canonical envelope schema_version 1 + integrity SHA256 + provenance (tested, E2E) |
 | Agent                   | 🟢 Verified     | **Real POST via nginx** `agent/agent.py` → `http://nginx:80` → backend:8000 — `GET /health` via nginx, `POST /api/evidence` per fixture, `POST /api/run` JOCKY sweep + fail-closed 422/403 via nginx (8 tests) |
 | Backend                 | 🟢 Verified     | PG persistence + compile/run + report + yara scan/polymorphic-demo + /evidence|findings (41 tests, health `db:true yara:true`) |
-| Detection engine        | 🟢 Verified     | **YARA 4.5 binary** (`yara` + `rules.yar` → `JOCKY_DEMO_MARKER/BYOVD_RTCore64/Process_Hollowing`) via `yara_scan_content()` + fallback string; `POST /api/detect` now yara-used, plus `POST /api/yara/scan` + `GET /api/yara/status`; polymorphic demo proves hash≠detection |
+| Detection engine        | 🟢 Verified     | **YARA 5 rules** (`JOCKY_DEMO_MARKER/BYOVD_RTCore64/Process_Hollowing` + `File_Suspicious_PE`/`Network_C2_Beacon`) + **Sigma 2 rules** (`jocky-001 T1055`, `jocky-002 T1068`) + **Behavioral** (`detection_engine.py` `sigma_scan()`/`behavioral_scan()`/`detect()` with mitre/severity/confidence per FORENSICS §31) — 11 tests |
 | Investigation graph     | 🟢 Verified     | Star host→evidence + process→file/net edges, live ReactFlow |
 | Timeline                | 🟢 Verified     | Ordered by observed_at |
 | Dashboard               | 🟢 Verified     | Editor + live Graph/Timeline/Risk + findings + 📄 Report PDF + **YARA panel (poly demo: 3 hashes → 1 cluster)** (live :3000) |
@@ -61,7 +61,7 @@ Build a safe, reproducible, defensive forensic investigation platform around the
 | Linux support           | 🟢 Verified     | **Synthetic Linux** `Linux*Provider` (`/proc`-style `/usr/bin/...`, `uid`, `inode`, `lsmod`) — same normalized contract — verified via `platform=linux` — 10 tests |
 | Controlled laboratory   | 🟢 Verified     | 6 fixtures + live poly demo (3 IRs same YARA cluster) + full-sweep cases + report |
 | End-to-end workflow     | 🟢 Verified     | Full sweep → envelope → YARA → Timeline/Graph/Risk→Report persists (Point 1+2) |
-| Automated tests         | 🟢 Verified     | **71 tests** (compiler 9, backend 13, e2e 3, forensic 6, report 4, yara 6, agent 8, grammar 12, platform 10) all passing |
+| Automated tests         | 🟢 Verified     | **82 tests** (compiler 9, backend 13, e2e 3, forensic 6, report 4, yara 6, agent 8, grammar 12, platform 10, detection 11) all passing |
 
 ---
 
@@ -177,8 +177,9 @@ Every stage must eventually be independently testable.
 * **Agent via nginx** `agent/agent.py` (stdlib `urllib`) — `GET /health` via `http://nginx:80`, `POST /api/evidence` per `testdata/*.json` fixture, `POST /api/run` JOCKY sweep `system.info+process+file+net` via nginx (same fail-closed 422/403 as direct), `healthcheck` `curl -sf http://nginx:80/health` in compose — 8 tests including integration `agent_scan_once` delegating to TestClient
 * **Grammar-wired compiler** `tools/jocky_lexer.py` — real `lex()` per `grammar/jocky.g4` tokens + `parse_member_calls()` per g4 `MemberCall`, `validate_and_collect()` returns line:col errors, used by both `tools/jockyc.py` + `backend/app/main.py` (single source; replaces `RE_CALL` regex), `.tokens` now real dump + `.ast` with calls/tokens, 12 new `test_compiler_grammar` tests (keywords, strings, comments, syntax errors, g4 coverage, backend same lexer)
 * **Platform providers** `backend/app/providers/` per ARCHITECTURE §8 + DESIGN §22 — `base.py` `ISystem/IProcess/IFile/INetwork/IDriverProvider`, `windows.py` (WinAPI synthetic `C:\Windows\...`), `linux.py` (`/proc` synthetic `uid/inode/lsmod`), `factory.py` `get_providers(platform)` + `detect_platform()` + `platform_from_request()`; `backend/app/main.py` `make_envelope(..., platform)` dispatches via `_platform_provider_payload()`, `RunRequest.platform` field, same JOCKY → same MITRE `T1105/T1055` but different `platform` + path/uid per FORENSICS §67; 10 `test_platform_providers` contract tests
-* **Tests** 71/71: 9+13+3+6+4+6+8+12+10 (compiler/backend/e2e/forensic/report/yara/agent/grammar/platform)
-* **Docker** 9 Up: backend (pango+PG+yara 4.5.2) :8000, frontend (YARA panel) :3000, nginx 8082, `agent` real POST via nginx, db healthy pgdata persisting
+* **Detection depth** `backend/app/detection_engine.py` per ARCHITECTURE §13 + FORENSICS §31 — `load_sigma_rules()` (yaml + fallback), `sigma_scan()` (jocky-001 ppid anomaly, jocky-002 BYOVD), `behavioral_scan()` (13 weights: ppid/hollowed/unbacked/reflective/vuln/yara/sigma/C2), `detect()` + `risk_for_payload()`; `yara/rules.yar` expanded to 5 rules (`File_Suspicious_PE` T1105, `Network_C2_Beacon` T1071) + `backend/app/main.py` fallback strings for new rules; `backend/requirements.txt` adds `pyyaml`; 11 `test_detection_depth` tests
+* **Tests** 82/82: 9+13+3+6+4+6+8+12+10+11 (compiler/backend/e2e/forensic/report/yara/agent/grammar/platform/detection)
+* **Docker** 9 Up: backend (pango+PG+yara 4.5.2 + 5 rules) :8000, frontend (YARA panel) :3000, nginx 8082, `agent` real POST via nginx, db healthy pgdata persisting
 
 ### Still Pending / Not Verified
 
@@ -322,12 +323,26 @@ Progressively add operations per LANGUAGE_SPEC.md §10, each with capability, sy
 10. ✅ Agent real POST via nginx (GET /health, POST /evidence, POST /run + fail-closed via nginx) — done (8 agent tests, 49 total)
 11. ✅ Lexer/Parser grammar-wired (jocky_lexer.py per g4 + Lexer.cpp, replaces RE_CALL, line:col errors) — done (12 grammar tests, 61 total)
 12. ✅ Platform providers (IProcess/IFile/INetwork per DESIGN §22, Windows vs Linux factory, same JOCKY → different adapter, normalized schema) — done (10 platform tests, 71 total)
-13. Case isolation UI (dropdown of cases from /api/cases) + host selector + filter
-14. Redis/MinIO wiring for artifact storage (currently declared but not used) + WeasyPrint PDF artifact to MinIO (optional)
+13. ✅ Detection depth (YARA 3→5 rules + Sigma 2 rules + behavioral engine per FORENSICS §31, mitre/severity/confidence) — done (11 detection tests, 82 total)
+14. Case isolation UI (dropdown of cases from /api/cases) + host selector + filter
+15. Redis/MinIO wiring for artifact storage (currently declared but not used) + WeasyPrint PDF artifact to MinIO (optional)
 
 ---
 
 # 11. Recent Changes
+
+### 2026-08-28 — Detection Depth (YARA 5 + Sigma 2 + Behavioral)
+
+#### Added
+- `backend/app/detection_engine.py` (180 lines) per ARCHITECTURE §13 + FORENSICS §31 — `load_sigma_rules()` (yaml `sigma/rules.yml` + fallback `SIGMA_RULES`), `sigma_scan(payload)` (jocky-001 `svchost ppid_anomaly` T1055, jocky-002 `RTCore64` T1068, confidence 0.85/0.95), `behavioral_scan()` (13 weights per `detector.py` + `calc_risk`: ppid 30/hollowed 40/unbacked 25/reflective 35/vuln 30/yara 20/sigma 15/file yara 35/C2 30 etc), `detect()` merges sigma+behavioral into finding shape `rule/severity/mitre/confidence/source`, `risk_for_payload()` delegate
+- `yara/rules.yar` — + `File_Suspicious_PE` (sample.exe|malware.exe T1105) + `Network_C2_Beacon` (192.0.2.20 T1071) → 5 rules total
+- `backend/app/main.py` — `yara_scan_content()` fallback now includes `File_Suspicious_PE` (`sample/malware`) + `Network_C2_Beacon` (`192.0.2.20`) + `rtc_core` case-insensitive for BYOVD
+- `backend/requirements.txt` — added `pyyaml==6.0.3` for sigma yaml parsing
+- `tests/test_detection_depth.py` (11) — sigma load, sigma ppid/byovd, negative benign, behavioral hollowing + full synthetic sweep per type, yara 5 rules presence, yara scan via API new rules, combined detect sigma+behavioral, api detect enriched, risk deterministic
+
+#### Verified
+- `pytest` 82/82 (11 new)
+- `sigma_scan` + `behavioral_scan` produce `mitre/severity/confidence` per §31 — full sweep each non-system evidence has ≥1 behavioral hit
 
 ### 2026-08-28 — Platform Providers (Windows vs Linux Abstraction)
 
