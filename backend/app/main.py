@@ -104,25 +104,59 @@ def _update_case_risk(case_id: int, risk: int):
         except Exception:
             pass
 
-# Whitelist per SECURITY_MODEL.md §16 + tools/jockyc.py
-OP_CAPS = {
-    "system.info": "system.read",
-    "process.list": "process.read",
-    "process.tree": "process.read",
-    "process.modules": "process.read",
-    "file.list": "file.read",
-    "file.hash": "file.hash",
-    "file.analyze": "file.read",
-    "file.metadata": "file.read",
-    "network.connections": "network.read",
-    "network.interfaces": "network.read",
-    "memory.analyze": "memory.analyze",
-    "driver.list": "driver.read",
-    "driver.scan": "driver.read",
-    "driver.risk": "driver.read",
-    "report.generate": "report.generate",
-    "evidence.load": "evidence.read",
-}
+# Whitelist per SECURITY_MODEL.md §16 + tools/jockyc.py — single source per grammar/jocky.g4
+# Grammar-wired: uses tools/jocky_lexer.py lex() + parse_member_calls() instead of RE_CALL regex
+try:
+    from tools.jocky_lexer import OP_CAPS as _LEX_OP_CAPS, validate_and_collect as _lex_validate
+    OP_CAPS = _LEX_OP_CAPS
+    _HAS_LEX = True
+    def validate_and_collect(source: str):
+        ops, caps, errors, tokens, calls = _lex_validate(source)
+        return ops, caps, errors
+except ImportError:
+    try:
+        from jocky_lexer import OP_CAPS as _LEX_OP_CAPS2, validate_and_collect as _lex_validate2
+        OP_CAPS = _LEX_OP_CAPS2
+        _HAS_LEX = True
+        def validate_and_collect(source: str):
+            ops, caps, errors, tokens, calls = _lex_validate2(source)
+            return ops, caps, errors
+    except Exception:
+        _HAS_LEX = False
+        OP_CAPS = {
+            "system.info": "system.read",
+            "process.list": "process.read",
+            "process.tree": "process.read",
+            "process.modules": "process.read",
+            "file.list": "file.read",
+            "file.hash": "file.hash",
+            "file.analyze": "file.read",
+            "file.metadata": "file.read",
+            "network.connections": "network.read",
+            "network.interfaces": "network.read",
+            "memory.analyze": "memory.analyze",
+            "driver.list": "driver.read",
+            "driver.scan": "driver.read",
+            "driver.risk": "driver.read",
+            "report.generate": "report.generate",
+            "evidence.load": "evidence.read",
+        }
+        RE_CALL = re.compile(r'([a-zA-Z_][a-zA-Z0-9_]*)\.([a-zA-Z_][a-zA-Z0-9_]*)\s*\(')
+        def validate_and_collect(source: str):
+            found = RE_CALL.findall(source)
+            ops, caps, seen = [], [], set()
+            errors = []
+            for ns, meth in found:
+                key = f"{ns}.{meth}"
+                if key not in OP_CAPS:
+                    errors.append(f"Unknown or unsupported capability: {key} — not in JOCKY IR whitelist. Fail-closed.")
+                elif key not in seen:
+                    seen.add(key)
+                    ops.append(key)
+                    cap = OP_CAPS[key]
+                    if cap not in caps:
+                        caps.append(cap)
+            return ops, caps, errors
 # Agent policy: which caps are allowed (deny-by-default per SECURITY_MODEL.md §17)
 DEFAULT_POLICY = {
     "system.read": True,
@@ -135,23 +169,6 @@ DEFAULT_POLICY = {
     "evidence.read": True,
     "report.generate": True,
 }
-RE_CALL = re.compile(r'([a-zA-Z_][a-zA-Z0-9_]*)\.([a-zA-Z_][a-zA-Z0-9_]*)\s*\(')
-
-def validate_and_collect(source: str):
-    found = RE_CALL.findall(source)
-    ops, caps, seen = [], [], set()
-    errors = []
-    for ns, meth in found:
-        key = f"{ns}.{meth}"
-        if key not in OP_CAPS:
-            errors.append(f"Unknown or unsupported capability: {key} — not in JOCKY IR whitelist. Fail-closed.")
-        elif key not in seen:
-            seen.add(key)
-            ops.append(key)
-            cap = OP_CAPS[key]
-            if cap not in caps:
-                caps.append(cap)
-    return ops, caps, errors
 
 def sha12(s: str) -> str:
     return hashlib.sha256(s.encode()).hexdigest()[:12]

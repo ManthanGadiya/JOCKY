@@ -38,9 +38,9 @@ Build a safe, reproducible, defensive forensic investigation platform around the
 | Repository structure    | 🟢 Complete     | Base project organization established      |
 | Documentation structure | 🟢 Complete     | 8 specs + ARCHITECTURE now correct         |
 | JOCKY language          | 🟡 In Progress  | 12 ops whitelisted; filtering/correlation pending |
-| Lexer                   | 🟠 Scaffolded   | Hand-rolled lex() + g4 exists; not wired to validator |
-| Parser                  | 🟠 Scaffolded   | 3-line stub; validation via regex RE_CALL in jockyc.py/IRGen.cpp |
-| AST                     | 🟠 Scaffolded   | `.ast` stub; no visitor                    |
+| Lexer                   | 🟢 Verified     | **Grammar-wired** `tools/jocky_lexer.py` `lex()` per `grammar/jocky.g4` + `jocky/src/Lexer.cpp` (ID/DOT/LPAREN/... + WS/COMMENT skip, line:col tracking) — used by `tools/jockyc.py` + `backend/app/main.py` both (12 tests) |
+| Parser                  | 🟢 Verified     | `parse_member_calls()` per g4 `MemberCall` + `validate_and_collect()` with line:col errors — fail-closed 422 includes `at X:Y`, syntax errors for unterminated string / unmatched '(' (12 tests) |
+| AST                     | 🟡 Partial      | `MemberCall` dataclass + `.tokens` real dump + `.ast` with calls/tokens; full visitor pending |
 | Semantic analysis       | 🟡 Partial      | Unknown op → 422 fail-closed via OP_CAPS whitelist (verified) |
 | Capability system       | 🟡 Partial      | 15 ops → 8 caps; DEFAULT_POLICY deny memory.analyze (403), allow system.read etc. |
 | IR                      | 🟢 Verified     | IR_VERSION=1, IR_CAPS/IR_OPS, EntryPoint, Imports, JOCKY_DEMO_MARKER, bb.poly.* (25 tests) |
@@ -61,7 +61,7 @@ Build a safe, reproducible, defensive forensic investigation platform around the
 | Linux support           | 🟡 Partial      | Synthetic provider; Docker verified |
 | Controlled laboratory   | 🟢 Verified     | 6 fixtures + live poly demo (3 IRs same YARA cluster) + full-sweep cases + report |
 | End-to-end workflow     | 🟢 Verified     | Full sweep → envelope → YARA → Timeline/Graph/Risk→Report persists (Point 1+2) |
-| Automated tests         | 🟢 Verified     | **49 tests** (compiler 9, backend 13, e2e 3, forensic 6, report 4, yara 6, agent 8) all passing |
+| Automated tests         | 🟢 Verified     | **61 tests** (compiler 9, backend 13, e2e 3, forensic 6, report 4, yara 6, agent 8, grammar 12) all passing |
 
 ---
 
@@ -175,14 +175,15 @@ Every stage must eventually be independently testable.
 * **Dashboard** :3000 — 4-op sweep default + traversal fail + **📄 Report PDF** + **YARA panel** (poly demo: 3 hashes → 1 cluster, hash≠detection)
 * **Report** `GET /report` → 20KB `%PDF` (WeasyPrint pydyf 0.11) verified Docker, HTML fallback host
 * **Agent via nginx** `agent/agent.py` (stdlib `urllib`) — `GET /health` via `http://nginx:80`, `POST /api/evidence` per `testdata/*.json` fixture, `POST /api/run` JOCKY sweep `system.info+process+file+net` via nginx (same fail-closed 422/403 as direct), `healthcheck` `curl -sf http://nginx:80/health` in compose — 8 tests including integration `agent_scan_once` delegating to TestClient
-* **Tests** 49/49: 9+13+3+6+4+6+8 (compiler/backend/e2e/forensic/report/yara/agent)
+* **Grammar-wired compiler** `tools/jocky_lexer.py` — real `lex()` per `grammar/jocky.g4` tokens + `parse_member_calls()` per g4 `MemberCall`, `validate_and_collect()` returns line:col errors, used by both `tools/jockyc.py` + `backend/app/main.py` (single source; replaces `RE_CALL` regex), `.tokens` now real dump + `.ast` with calls/tokens, 12 new `test_compiler_grammar` tests (keywords, strings, comments, syntax errors, g4 coverage, backend same lexer)
+* **Tests** 61/61: 9+13+3+6+4+6+8+12 (compiler/backend/e2e/forensic/report/yara/agent/grammar)
 * **Docker** 9 Up: backend (pango+PG+yara 4.5.2) :8000, frontend (YARA panel) :3000, nginx 8082, `agent` real POST via nginx, db healthy pgdata persisting
 
 ### Still Pending / Not Verified
 
-* Real forensic adapter (WinAPI/ETW, /proc) — synthetic only
+* Real forensic adapter (WinAPI/ETW, /proc) — synthetic only (next milestone)
 * Windows native validation (synthetic IDs only)
-* Lexer/Parser/AST still stubs (regex whitelist covers spec correctly but not grammar-wired)
+* AST visitor / full block/funcDecl control-flow (grammar has them, IR only emits MemberCall ops)
 * Redis/MinIO artifact storage not yet wired
 
 ---
@@ -319,12 +320,25 @@ Progressively add operations per LANGUAGE_SPEC.md §10, each with capability, sy
 8. ✅ Report PDF (WeasyPrint 20KB, frontend 📄 button) — done (4 report tests)
 9. 41 tests — done (9+13+3+6+4+6)
 10. ✅ Agent real POST via nginx (GET /health, POST /evidence, POST /run + fail-closed via nginx) — done (8 agent tests, 49 total)
-11. Case isolation UI (dropdown of cases from /api/cases) + host selector + filter
-12. Redis/MinIO wiring for artifact storage (currently declared but not used) + WeasyPrint PDF artifact to MinIO (optional)
+11. ✅ Lexer/Parser grammar-wired (jocky_lexer.py per g4 + Lexer.cpp, replaces RE_CALL, line:col errors) — done (12 grammar tests, 61 total)
+12. Case isolation UI (dropdown of cases from /api/cases) + host selector + filter
+13. Redis/MinIO wiring for artifact storage (currently declared but not used) + WeasyPrint PDF artifact to MinIO (optional)
 
 ---
 
 # 11. Recent Changes
+
+### 2026-08-28 — Compiler Grammar-Wired (Lexer/Parser per g4)
+
+#### Added
+- `tools/jocky_lexer.py` (185 lines) — `lex()` per `grammar/jocky.g4` + `jocky/src/Lexer.cpp` (WS/COMMENT skip, STRING with escapes, NUMBER, ID/KW, OP 2-char, line:col), `Token` dataclass, `parse_member_calls()` per g4 `MemberCall` `expr '.' ID '(' argList? ')'`, syntax errors for unterminated string / unmatched '(' with `LANGUAGE_SPEC §21` style, `MemberCall` dataclass, `OP_CAPS` single source, `validate_and_collect()` replaces `RE_CALL` regex (returns ops/caps/errors+tokens+calls), `lex_dump()`
+- `tools/jockyc.py` — now imports `jocky_lexer.validate_and_collect` + `lex`, `generate_ir` uses grammar-wired errors, `.tokens` now real dump (`ID/DOT/... line:col`), `.ast` with `calls=` + `tokens=N`
+- `backend/app/main.py` — same `jocky_lexer` import (single source with `jockyc.py`), removed `RE_CALL` regex, `validate_and_collect` now line:col aware per `§33`
+- `tests/test_compiler_grammar.py` (12) — lex simple, comment+string, keywords, member_calls extract, unterminated string, unmatched paren, whitelist pass, unknown with location, dedup, integration with `jockyc` + backend
+
+#### Verified
+- `pytest` 61/61 (12 new)
+- Backend + jockyc both reject `edr.disable();` → `Unknown … at 1:1 … Fail-closed.` (same message, same source)
 
 ### 2026-08-28 — Agent Real POST via Nginx (Layer 4 → L5 → L6)
 
