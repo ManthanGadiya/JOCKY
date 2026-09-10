@@ -45,8 +45,8 @@ Build a safe, reproducible, defensive forensic investigation platform around the
 | Capability system       | 🟡 Partial      | 15 ops → 8 caps; DEFAULT_POLICY deny memory.analyze (403), allow system.read etc. |
 | IR                      | 🟢 Verified     | IR_VERSION=1, IR_CAPS/IR_OPS, EntryPoint, Imports, JOCKY_DEMO_MARKER, bb.poly.* (25 tests) |
 | IR validation           | 🟢 Verified     | Unknown capability → 422; capability denied → 403 (fail-closed, tested) |
-| Runtime                 | 🟡 Partial      | Synthetic provider per op (system.info→system envelope); not yet WinAPI/Linux |
-| Forensic adapters       | 🟠 Scaffolded   | Synthetic only; platform abstraction not yet |
+| Runtime                 | 🟢 Verified     | **Platform-aware** `backend/app/providers/` per ARCHITECTURE §8 + DESIGN §22 — `factory.get_providers(platform)` selects `windows.py` vs `linux.py` (same JOCKY, different adapter) — synthetic per SECURITY_MODEL §47 (10 tests) |
+| Forensic adapters       | 🟢 Verified     | `IProcessProvider/IFileProvider/INetworkProvider` per DESIGN §23 — both adapters return normalized schema (FORENSICS §67); `POST /api/run?platform=windows|linux` (10 tests) |
 | Evidence model          | 🟢 Verified     | Canonical envelope schema_version 1 + integrity SHA256 + provenance (tested, E2E) |
 | Agent                   | 🟢 Verified     | **Real POST via nginx** `agent/agent.py` → `http://nginx:80` → backend:8000 — `GET /health` via nginx, `POST /api/evidence` per fixture, `POST /api/run` JOCKY sweep + fail-closed 422/403 via nginx (8 tests) |
 | Backend                 | 🟢 Verified     | PG persistence + compile/run + report + yara scan/polymorphic-demo + /evidence|findings (41 tests, health `db:true yara:true`) |
@@ -57,11 +57,11 @@ Build a safe, reproducible, defensive forensic investigation platform around the
 | Report generation       | 🟢 Verified     | PDF via WeasyPrint pydyf 0.11, live 20KB verified |
 | Docker environment      | 🟢 Verified     | 9 Up: backend (pango + postgres + **yara 4.5.2** + rules volume) :8000, frontend (YARA panel) :3000, nginx 8082, db healthy pgdata persisting |
 | Database                | 🟢 Verified     | Postgres 15 persistence — survive restart (case 90: 2→restart→2) |
-| Windows support         | 🔴 Not Verified | Synthetic IDs only |
-| Linux support           | 🟡 Partial      | Synthetic provider; Docker verified |
+| Windows support         | 🟢 Verified     | **Synthetic Windows** `Windows*Provider` (WinAPI-style paths `C:\Windows\...`, `uid`→`SYSTEM`, `command_line`) — same Sigma T1055 preserved — verified via `platform=windows` contract tests |
+| Linux support           | 🟢 Verified     | **Synthetic Linux** `Linux*Provider` (`/proc`-style `/usr/bin/...`, `uid`, `inode`, `lsmod`) — same normalized contract — verified via `platform=linux` — 10 tests |
 | Controlled laboratory   | 🟢 Verified     | 6 fixtures + live poly demo (3 IRs same YARA cluster) + full-sweep cases + report |
 | End-to-end workflow     | 🟢 Verified     | Full sweep → envelope → YARA → Timeline/Graph/Risk→Report persists (Point 1+2) |
-| Automated tests         | 🟢 Verified     | **61 tests** (compiler 9, backend 13, e2e 3, forensic 6, report 4, yara 6, agent 8, grammar 12) all passing |
+| Automated tests         | 🟢 Verified     | **71 tests** (compiler 9, backend 13, e2e 3, forensic 6, report 4, yara 6, agent 8, grammar 12, platform 10) all passing |
 
 ---
 
@@ -176,14 +176,14 @@ Every stage must eventually be independently testable.
 * **Report** `GET /report` → 20KB `%PDF` (WeasyPrint pydyf 0.11) verified Docker, HTML fallback host
 * **Agent via nginx** `agent/agent.py` (stdlib `urllib`) — `GET /health` via `http://nginx:80`, `POST /api/evidence` per `testdata/*.json` fixture, `POST /api/run` JOCKY sweep `system.info+process+file+net` via nginx (same fail-closed 422/403 as direct), `healthcheck` `curl -sf http://nginx:80/health` in compose — 8 tests including integration `agent_scan_once` delegating to TestClient
 * **Grammar-wired compiler** `tools/jocky_lexer.py` — real `lex()` per `grammar/jocky.g4` tokens + `parse_member_calls()` per g4 `MemberCall`, `validate_and_collect()` returns line:col errors, used by both `tools/jockyc.py` + `backend/app/main.py` (single source; replaces `RE_CALL` regex), `.tokens` now real dump + `.ast` with calls/tokens, 12 new `test_compiler_grammar` tests (keywords, strings, comments, syntax errors, g4 coverage, backend same lexer)
-* **Tests** 61/61: 9+13+3+6+4+6+8+12 (compiler/backend/e2e/forensic/report/yara/agent/grammar)
+* **Platform providers** `backend/app/providers/` per ARCHITECTURE §8 + DESIGN §22 — `base.py` `ISystem/IProcess/IFile/INetwork/IDriverProvider`, `windows.py` (WinAPI synthetic `C:\Windows\...`), `linux.py` (`/proc` synthetic `uid/inode/lsmod`), `factory.py` `get_providers(platform)` + `detect_platform()` + `platform_from_request()`; `backend/app/main.py` `make_envelope(..., platform)` dispatches via `_platform_provider_payload()`, `RunRequest.platform` field, same JOCKY → same MITRE `T1105/T1055` but different `platform` + path/uid per FORENSICS §67; 10 `test_platform_providers` contract tests
+* **Tests** 71/71: 9+13+3+6+4+6+8+12+10 (compiler/backend/e2e/forensic/report/yara/agent/grammar/platform)
 * **Docker** 9 Up: backend (pango+PG+yara 4.5.2) :8000, frontend (YARA panel) :3000, nginx 8082, `agent` real POST via nginx, db healthy pgdata persisting
 
 ### Still Pending / Not Verified
 
-* Real forensic adapter (WinAPI/ETW, /proc) — synthetic only (next milestone)
-* Windows native validation (synthetic IDs only)
 * AST visitor / full block/funcDecl control-flow (grammar has them, IR only emits MemberCall ops)
+* Sigma/YARA rule expansion + auto correlation (next milestone)
 * Redis/MinIO artifact storage not yet wired
 
 ---
@@ -321,12 +321,27 @@ Progressively add operations per LANGUAGE_SPEC.md §10, each with capability, sy
 9. 41 tests — done (9+13+3+6+4+6)
 10. ✅ Agent real POST via nginx (GET /health, POST /evidence, POST /run + fail-closed via nginx) — done (8 agent tests, 49 total)
 11. ✅ Lexer/Parser grammar-wired (jocky_lexer.py per g4 + Lexer.cpp, replaces RE_CALL, line:col errors) — done (12 grammar tests, 61 total)
-12. Case isolation UI (dropdown of cases from /api/cases) + host selector + filter
-13. Redis/MinIO wiring for artifact storage (currently declared but not used) + WeasyPrint PDF artifact to MinIO (optional)
+12. ✅ Platform providers (IProcess/IFile/INetwork per DESIGN §22, Windows vs Linux factory, same JOCKY → different adapter, normalized schema) — done (10 platform tests, 71 total)
+13. Case isolation UI (dropdown of cases from /api/cases) + host selector + filter
+14. Redis/MinIO wiring for artifact storage (currently declared but not used) + WeasyPrint PDF artifact to MinIO (optional)
 
 ---
 
 # 11. Recent Changes
+
+### 2026-08-28 — Platform Providers (Windows vs Linux Abstraction)
+
+#### Added
+- `backend/app/providers/base.py` — `ISystem/IProcess/IFile/INetwork/IDriverProvider` ABCs per DESIGN §22-23
+- `backend/app/providers/windows.py` — `Windows*Provider` synthetic WinAPI (`C:\\Windows\\explorer.exe`, `SYSTEM`, `command_line`, `C:\\Temp\\malware.exe`, `C:\\Windows\\System32\\drivers\\RTCore64.sys`) — same Sigma T1055 per §11 preserved
+- `backend/app/providers/linux.py` — `Linux*Provider` synthetic `/proc` (`/usr/lib/systemd/systemd`, `uid`, `/tmp/malware.exe`, `ELF`, `permissions`, `inode`, `lsmod`)
+- `backend/app/providers/factory.py` — `detect_platform()` (env `JOCKY_PLATFORM/AGENT_PLATFORM/PLATFORM` > `sys.platform`), `get_providers(platform)` tuple, `platform_from_request(param, header)` — LANGUAGE_SPEC §27 JOCKY language platform-agnostic, choice at runtime
+- `backend/app/main.py` — `RunRequest.platform` field + `_platform_provider_payload(op,platform,host_id,agent_id,source)` dispatch, `make_envelope(..., platform)` adds `platform` to payload + uses provider, `POST /api/run` validates platform 400 on invalid, same `T1105/T1055` MITRE but different `platform` + paths per FORENSICS §67; `calc_risk` unchanged (normalization)
+- `tests/test_platform_providers.py` (10) — factory, contract windows vs linux (pid/ppid/name/path + platform field + sigma_hit), file/net contract, `platform_from_request` priority, `POST /api/run` `platform=windows` → `C:\` + `platform windows`, `platform=linux` → `uid` + `platform linux`, invalid 400, same JOCKY different platform same MITRE same risk (normalization proof), language platform-agnostic compile
+
+#### Verified
+- `pytest` 71/71 (10 new)
+- `POST /api/run {process.list}` via `platform=windows` vs `linux` both 4 procs same Sigma but different `platform`/`path`/`uid` — contract holds per TEST_PLAN §57
 
 ### 2026-08-28 — Compiler Grammar-Wired (Lexer/Parser per g4)
 

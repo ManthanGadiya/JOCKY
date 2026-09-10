@@ -6,6 +6,18 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/) and [Sem
 
 ## [Unreleased]
 
+## 2026-08-28 — Platform Providers — Windows vs Linux Abstraction (IProcessProvider)
+
+### Added
+- `backend/app/providers/base.py` — `ISystem/IProcess/IFile/INetwork/IDriverProvider` ABCs (DESIGN §22-23)
+- `backend/app/providers/windows.py` — `Windows*Provider` synthetic WinAPI (`C:\\Windows\\...`, `SYSTEM`, `command_line`) + `linux.py` synthetic `/proc` (`uid`, `inode`, `lsmod`, `ELF`)
+- `backend/app/providers/factory.py` — `detect_platform()` + `get_providers(platform)` + `platform_from_request()` — LANGUAGE_SPEC §27 same JOCKY, different adapter
+- `backend/app/main.py` — `RunRequest.platform` + `_platform_provider_payload()` + `make_envelope(..., platform)` platform field; `POST /api/run` validates platform; same `T1105/T1055` but different platform/payload per FORENSICS §67
+- `tests/test_platform_providers.py` (10) — factory, contract windows vs linux, file/net, platform_from_request, API windows/linux/invalid, same JOCKY diff platform same MITRE/risk, compile platform-agnostic
+
+### Verified
+- `pytest` 71/71 (10 new) — contract holds per TEST_PLAN §57
+
 ## 2026-08-28 — Compiler Grammar-Wired — Lexer/Parser per g4 replaces RE_CALL
 
 ### Added
