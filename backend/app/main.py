@@ -450,9 +450,11 @@ def yara_scan_content(content: str) -> tuple[List[str], bool]:
     if not yara_used or not hits:
         fallback=[]
         if "JOCKY_DEMO_MARKER" in content: fallback.append("JOCKY_DEMO_MARKER")
-        if "RTCore64" in content or "RTCore64.sys" in content: fallback.append("BYOVD_RTCore64")
+        if "RTCore64" in content or "RTCore64.sys" in content or "rtc_core" in content.lower(): fallback.append("BYOVD_RTCore64")
         # hollowing signals
         if "hollowed" in content.lower(): fallback.append("Process_Hollowing")
+        if "sample.exe" in content.lower() or "malware.exe" in content.lower(): fallback.append("File_Suspicious_PE")
+        if "192.0.2.20" in content: fallback.append("Network_C2_Beacon")
         if yara_used:
             # merge fallback into yara hits if yara missed due to nocase etc (keep yara as truth but supplement)
             for h in fallback:

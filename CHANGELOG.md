@@ -6,6 +6,18 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/) and [Sem
 
 ## [Unreleased]
 
+## 2026-08-28 — Detection Depth — YARA 5 + Sigma 2 + Behavioral Engine
+
+### Added
+- `backend/app/detection_engine.py` — `load_sigma_rules()` (yaml + fallback), `sigma_scan()` (jocky-001 T1055 ppid anomaly, jocky-002 T1068 BYOVD), `behavioral_scan()` (13 weights: ppid/hollowed/unbacked/reflective/vuln/loldrivers/yara/sigma/C2), `detect()` (sigma+behavioral → rule/severity/mitre/confidence/source), `risk_for_payload()`
+- `yara/rules.yar` — + `File_Suspicious_PE` (T1105) + `Network_C2_Beacon` (T1071) → 5 rules
+- `backend/app/main.py` — `yara_scan_content()` fallback adds `File_Suspicious_PE`/`Network_C2_Beacon`/`rtc_core` strings
+- `backend/requirements.txt` — `pyyaml==6.0.3`
+- `tests/test_detection_depth.py` (11) — sigma load/ppid/byovd/negative, behavioral hollowing + full synthetic, yara 5 presence + API, combined detect, risk deterministic
+
+### Verified
+- `pytest` 82/82 (11 new)
+
 ## 2026-08-28 — Platform Providers — Windows vs Linux Abstraction (IProcessProvider)
 
 ### Added
