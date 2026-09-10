@@ -6,6 +6,61 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/) and [Sem
 
 ## [Unreleased]
 
+## 2026-08-28 — Case Isolation UI — Cases + Host/Platform Filters (95 tests)
+
+### Added
+- `backend/app/main.py` — `POST /api/cases` (CaseCreate auto-increment, per ARCHITECTURE §10)
+- `frontend/src/App.tsx` — case isolation bar: case dropdown + `+ New Case`, `hostFilter`/`typeFilter`/`platformFilter`, `runPlatform` selector, `filteredEvidence` + filtered counts (FORENSICS §7, ARCHITECTURE §11)
+- `tests/test_case_isolation.py` (5) — create+isolation, list grows, host/platform filters, UI presence
+
+### Verified
+- `pytest` 95/95 (5 new)
+
+## 2026-08-28 — Harden & Persist — MinIO + Redis (90 tests)
+
+### Added
+- `backend/app/storage.py` — MinIO `jocky-reports`/`jocky-evidence` (auto-create, mem fallback), `put_report`/`get_report`/`put_bytes`/`get_bytes`/`put_evidence_artifact`, `storage_status()`
+- `backend/app/cache.py` — Redis `cache_get/set/invalidate` (TTL 60/300, mem fallback), `cache_status()`
+- `backend/app/main.py` — `GET /health` `minio`/`redis` fields + `storage`/`cache`, `GET /api/storage/status`, `POST /api/artifacts/upload` (5MB 413) + `GET /api/artifacts/{key}`, `POST /api/evidence` artifact + cache invalidate, `GET /api/cases/{id}/report` MinIO + Redis `X-Report-Cached`
+- `tests/test_storage.py` (8) — health, storage status, put/get, cache, report→MinIO, evidence artifact, artifact upload/get, 413
+
+### Verified
+- `pytest` 90/90 (8 new)
+
+## 2026-08-28 — Detection Depth — YARA 5 + Sigma 2 + Behavioral Engine
+
+### Added
+- `backend/app/detection_engine.py` — `load_sigma_rules()` (yaml + fallback), `sigma_scan()` (jocky-001 T1055 ppid anomaly, jocky-002 T1068 BYOVD), `behavioral_scan()` (13 weights: ppid/hollowed/unbacked/reflective/vuln/loldrivers/yara/sigma/C2), `detect()` (sigma+behavioral → rule/severity/mitre/confidence/source), `risk_for_payload()`
+- `yara/rules.yar` — + `File_Suspicious_PE` (T1105) + `Network_C2_Beacon` (T1071) → 5 rules
+- `backend/app/main.py` — `yara_scan_content()` fallback adds `File_Suspicious_PE`/`Network_C2_Beacon`/`rtc_core` strings
+- `backend/requirements.txt` — `pyyaml==6.0.3`
+- `tests/test_detection_depth.py` (11) — sigma load/ppid/byovd/negative, behavioral hollowing + full synthetic, yara 5 presence + API, combined detect, risk deterministic
+
+### Verified
+- `pytest` 82/82 (11 new)
+
+## 2026-08-28 — Platform Providers — Windows vs Linux Abstraction (IProcessProvider)
+
+### Added
+- `backend/app/providers/base.py` — `ISystem/IProcess/IFile/INetwork/IDriverProvider` ABCs (DESIGN §22-23)
+- `backend/app/providers/windows.py` — `Windows*Provider` synthetic WinAPI (`C:\\Windows\\...`, `SYSTEM`, `command_line`) + `linux.py` synthetic `/proc` (`uid`, `inode`, `lsmod`, `ELF`)
+- `backend/app/providers/factory.py` — `detect_platform()` + `get_providers(platform)` + `platform_from_request()` — LANGUAGE_SPEC §27 same JOCKY, different adapter
+- `backend/app/main.py` — `RunRequest.platform` + `_platform_provider_payload()` + `make_envelope(..., platform)` platform field; `POST /api/run` validates platform; same `T1105/T1055` but different platform/payload per FORENSICS §67
+- `tests/test_platform_providers.py` (10) — factory, contract windows vs linux, file/net, platform_from_request, API windows/linux/invalid, same JOCKY diff platform same MITRE/risk, compile platform-agnostic
+
+### Verified
+- `pytest` 71/71 (10 new) — contract holds per TEST_PLAN §57
+
+## 2026-08-28 — Compiler Grammar-Wired — Lexer/Parser per g4 replaces RE_CALL
+
+### Added
+- `tools/jocky_lexer.py` — `lex()` per `grammar/jocky.g4` + `jocky/src/Lexer.cpp` (ID/DOT/LPAREN/RPAREN/SEMI/COMMA/STRING/NUMBER/OP/KW/END, WS/COMMENT skip, line:col), `parse_member_calls()` per g4 `MemberCall`, `validate_and_collect()` with `at line:col` fail-closed errors, syntax checks for unterminated string / unmatched '('; single-source `OP_CAPS`
+- `tools/jockyc.py` + `backend/app/main.py` — now both import `jocky_lexer` (single source; removes `RE_CALL` regex); `.tokens` real dump, `.ast` calls+tokens
+- `tests/test_compiler_grammar.py` (12) — lex, comment/string, keywords, extract, syntax errors, whitelist, dedup, g4 coverage, jockyc+backend integration
+
+### Verified
+- `pytest` 61/61 (12 new) — both host fallback and backend reject `edr.disable()` with `at 1:1` location
+
 ## 2026-08-28 — Agent Real POST via Nginx — Layer 4 → L5 → L6
 
 ### Added

@@ -22,6 +22,34 @@ except ImportError:
     except Exception:
         _db = None
 
+# --- Storage / Cache (MinIO + Redis) per ARCHITECTURE §11 ---
+try:
+    from . import storage as _storage
+    from . import cache as _cache
+except ImportError:
+    try:
+        import backend.app.storage as _storage
+        import backend.app.cache as _cache
+    except Exception:
+        _storage = None
+        _cache = None
+
+def _storage_status():
+    if _storage and hasattr(_storage, "storage_status"):
+        try:
+            return _storage.storage_status()
+        except Exception:
+            return {"minio_available": False}
+    return {"minio_available": False}
+
+def _cache_status():
+    if _cache and hasattr(_cache, "cache_status"):
+        try:
+            return _cache.cache_status()
+        except Exception:
+            return {"redis_available": False}
+    return {"redis_available": False}
+
 def _db_available() -> bool:
     return _db is not None and getattr(_db, "is_db_available", lambda: False)()
 
@@ -104,25 +132,59 @@ def _update_case_risk(case_id: int, risk: int):
         except Exception:
             pass
 
-# Whitelist per SECURITY_MODEL.md §16 + tools/jockyc.py
-OP_CAPS = {
-    "system.info": "system.read",
-    "process.list": "process.read",
-    "process.tree": "process.read",
-    "process.modules": "process.read",
-    "file.list": "file.read",
-    "file.hash": "file.hash",
-    "file.analyze": "file.read",
-    "file.metadata": "file.read",
-    "network.connections": "network.read",
-    "network.interfaces": "network.read",
-    "memory.analyze": "memory.analyze",
-    "driver.list": "driver.read",
-    "driver.scan": "driver.read",
-    "driver.risk": "driver.read",
-    "report.generate": "report.generate",
-    "evidence.load": "evidence.read",
-}
+# Whitelist per SECURITY_MODEL.md §16 + tools/jockyc.py — single source per grammar/jocky.g4
+# Grammar-wired: uses tools/jocky_lexer.py lex() + parse_member_calls() instead of RE_CALL regex
+try:
+    from tools.jocky_lexer import OP_CAPS as _LEX_OP_CAPS, validate_and_collect as _lex_validate
+    OP_CAPS = _LEX_OP_CAPS
+    _HAS_LEX = True
+    def validate_and_collect(source: str):
+        ops, caps, errors, tokens, calls = _lex_validate(source)
+        return ops, caps, errors
+except ImportError:
+    try:
+        from jocky_lexer import OP_CAPS as _LEX_OP_CAPS2, validate_and_collect as _lex_validate2
+        OP_CAPS = _LEX_OP_CAPS2
+        _HAS_LEX = True
+        def validate_and_collect(source: str):
+            ops, caps, errors, tokens, calls = _lex_validate2(source)
+            return ops, caps, errors
+    except Exception:
+        _HAS_LEX = False
+        OP_CAPS = {
+            "system.info": "system.read",
+            "process.list": "process.read",
+            "process.tree": "process.read",
+            "process.modules": "process.read",
+            "file.list": "file.read",
+            "file.hash": "file.hash",
+            "file.analyze": "file.read",
+            "file.metadata": "file.read",
+            "network.connections": "network.read",
+            "network.interfaces": "network.read",
+            "memory.analyze": "memory.analyze",
+            "driver.list": "driver.read",
+            "driver.scan": "driver.read",
+            "driver.risk": "driver.read",
+            "report.generate": "report.generate",
+            "evidence.load": "evidence.read",
+        }
+        RE_CALL = re.compile(r'([a-zA-Z_][a-zA-Z0-9_]*)\.([a-zA-Z_][a-zA-Z0-9_]*)\s*\(')
+        def validate_and_collect(source: str):
+            found = RE_CALL.findall(source)
+            ops, caps, seen = [], [], set()
+            errors = []
+            for ns, meth in found:
+                key = f"{ns}.{meth}"
+                if key not in OP_CAPS:
+                    errors.append(f"Unknown or unsupported capability: {key} — not in JOCKY IR whitelist. Fail-closed.")
+                elif key not in seen:
+                    seen.add(key)
+                    ops.append(key)
+                    cap = OP_CAPS[key]
+                    if cap not in caps:
+                        caps.append(cap)
+            return ops, caps, errors
 # Agent policy: which caps are allowed (deny-by-default per SECURITY_MODEL.md §17)
 DEFAULT_POLICY = {
     "system.read": True,
@@ -135,23 +197,6 @@ DEFAULT_POLICY = {
     "evidence.read": True,
     "report.generate": True,
 }
-RE_CALL = re.compile(r'([a-zA-Z_][a-zA-Z0-9_]*)\.([a-zA-Z_][a-zA-Z0-9_]*)\s*\(')
-
-def validate_and_collect(source: str):
-    found = RE_CALL.findall(source)
-    ops, caps, seen = [], [], set()
-    errors = []
-    for ns, meth in found:
-        key = f"{ns}.{meth}"
-        if key not in OP_CAPS:
-            errors.append(f"Unknown or unsupported capability: {key} — not in JOCKY IR whitelist. Fail-closed.")
-        elif key not in seen:
-            seen.add(key)
-            ops.append(key)
-            cap = OP_CAPS[key]
-            if cap not in caps:
-                caps.append(cap)
-    return ops, caps, errors
 
 def sha12(s: str) -> str:
     return hashlib.sha256(s.encode()).hexdigest()[:12]
@@ -248,57 +293,61 @@ def validate_path(path: str):
         if "passwd" in path or "shadow" in path or "windows/system32/config" in path.lower():
             raise ValueError(f"Path rejected: {path!r} — outside allowed evidence roots")
 
-def make_envelope(op: str, agent_id: str, host_id: str, case_id: int, ir_hash: str, source_hash: str, caps: List[str], source: str = ""):
+def _platform_provider_payload(op: str, platform: str, host_id: str, agent_id: str, source: str = "") -> tuple[Dict[str, Any], str]:
+    """Dispatch to Windows vs Linux provider per ARCHITECTURE.md §8 + DESIGN.md §22 — keep JOCKY language platform-agnostic (LANGUAGE_SPEC §27)."""
+    try:
+        from .providers.factory import get_providers
+        sys_p, proc_p, file_p, net_p, drv_p = get_providers(platform)
+    except Exception:
+        return {}, "generic"
+    if op == "system.info":
+        return sys_p.collect(host_id), "system"
+    if op.startswith("process."):
+        procs = proc_p.list_processes(host_id)
+        # keep Sigma correlation for demo (same across platforms per FORENSICS_SPEC §43)
+        return {"type": "process", "processes": procs, "count": len(procs), "note": f"synthetic {platform} — correlated tree per LANGUAGE_SPEC process.list; ppid anomaly flagged per Sigma jocky-001", "sigma_rule": "jocky-001", "mitre": "T1055", "platform": platform}, "process"
+    if op.startswith("file."):
+        raw_path = extract_file_arg(source, op) or ("/evidence/sample.exe" if platform=="linux" else "C:\\Evidence\\sample.exe")
+        validate_path(raw_path)
+        data = file_p.hash_file(raw_path, host_id)
+        data["mitre"] = "T1105" if data.get("yara_hit") else None
+        data["note"] = f"synthetic {platform} file op via {data.get('source_adapter','provider')} — no real filesystem read (safe)"
+        return data, "file"
+    if op.startswith("network."):
+        conns = net_p.list_connections(host_id)
+        return {"type": "network", "connections": conns, "count": len(conns), "note": f"synthetic {platform} — no raw socket capture", "mitre": "T1071", "platform": platform}, "network"
+    if op.startswith("driver."):
+        drv = drv_p.scan(host_id)
+        return {"type": "driver", "driver": drv, "note": f"synthetic {platform}", "platform": platform}, "driver"
+    return {}, "generic"
+
+def make_envelope(op: str, agent_id: str, host_id: str, case_id: int, ir_hash: str, source_hash: str, caps: List[str], source: str = "", platform: str = None):
     now = datetime.datetime.utcnow().isoformat()+"Z"
     # use total count from DB if available, else in-memory, to keep EV ids unique across restarts
     total = len(_get_evidence())
     eid = f"EV-{datetime.datetime.utcnow().strftime('%Y%m%d')}-{total+1:06d}"
     t = op.split(".")[0] if "." in op else op
-    payload: Dict[str, Any] = {"jocky_op": op, "ir_hash": ir_hash, "source_hash": source_hash}
-    if op == "system.info":
-        payload.update({"type": "system", "hostname": host_id, "os": "linux", "arch": "x86_64", "kernel": "5.15-jocky", "jocky_version": "1.0", "agent_id": agent_id, "boot_time": "2026-08-28T00:00:00Z", "timezone": "UTC"})
+    # Platform dispatch per ARCHITECTURE.md §8 — JOCKY language platform-agnostic, provider chosen here
+    if platform is None:
+        try:
+            from .providers.factory import detect_platform
+            platform = detect_platform()
+        except Exception:
+            platform = "linux"
+    payload: Dict[str, Any] = {"jocky_op": op, "ir_hash": ir_hash, "source_hash": source_hash, "platform": platform}
+    # Try provider first
+    prov_payload, prov_type = _platform_provider_payload(op, platform, host_id, agent_id, source)
+    if prov_payload:
+        payload.update(prov_payload)
+        ev_type = prov_type
+    elif op == "system.info":
+        payload.update({"type": "system", "hostname": host_id, "os": platform, "arch": "x86_64", "kernel": f"5.15-jocky-{platform}", "jocky_version": "1.0", "agent_id": agent_id, "boot_time": "2026-08-28T00:00:00Z", "timezone": "UTC", "platform": platform})
         ev_type = "system"
-    elif op.startswith("process."):
-        # richer correlated process tree per FORENSICS_SPEC §11-12
-        processes = [
-            {"pid": 1, "ppid": 0, "name": "systemd", "path": "/sbin/init", "user": "root", "creation_time": "2026-08-28T10:30:00Z", "risk": 0},
-            {"pid": 1234, "ppid": 1, "name": "explorer.exe", "path": "C:\\Windows\\explorer.exe", "user": "analyst", "creation_time": "2026-08-28T10:31:00Z", "ppid_anomaly": False, "risk": 10},
-            {"pid": 5678, "ppid": 1234, "name": "svchost.exe", "path": "C:\\Windows\\System32\\svchost.exe", "user": "SYSTEM", "creation_time": "2026-08-28T10:32:03Z", "ppid_anomaly": True, "risk": 35, "sigma_hit": "jocky-001 Parent Anomaly (T1055)"},
-            {"pid": 9012, "ppid": 5678, "name": "malware.exe", "path": "C:\\Temp\\malware.exe", "user": "analyst", "creation_time": "2026-08-28T10:31:45Z", "parent": 5678, "risk": 75, "yara_hit": "JOCKY_DEMO_MARKER"},
-        ]
-        payload.update({"type": "process", "processes": processes, "count": len(processes), "note": "synthetic - correlated tree per LANGUAGE_SPEC process.list; ppid anomaly flagged per Sigma jocky-001", "sigma_rule": "jocky-001", "mitre": "T1055"})
-        ev_type = "process"
-    elif op.startswith("file."):
-        raw_path = extract_file_arg(source, op) or "/evidence/sample.exe"
-        validate_path(raw_path)
-        sha = hashlib.sha256(raw_path.encode()).hexdigest()
-        low = raw_path.lower()
-        is_suspicious = any(k in low for k in ("suspicious","sample.exe","malware","evil","payload","implant"))
-        payload.update({
-            "type": "file", "path": raw_path, "name": raw_path.split("/")[-1].split("\\")[-1],
-            "size": 1048576 if is_suspicious else 2048, "file_type": "PE32 executable" if raw_path.endswith(".exe") else "text",
-            "creation_time": "2026-08-28T10:31:12Z", "modification_time": "2026-08-28T10:31:12Z",
-            "hashes": {"sha256": sha, "sha512": hashlib.sha512(raw_path.encode()).hexdigest()[:64]},
-            "sha256": sha, "yara_hit": "JOCKY_DEMO_MARKER" if is_suspicious else None,
-            "sigma_hit": None, "mitre": "T1105" if is_suspicious else None,
-            "note": "synthetic file op — no real filesystem read (safe)"
-        })
-        ev_type = "file"
-    elif op.startswith("network."):
-        conns = [
-            {"local_address": "192.0.2.10", "local_port": 49152, "remote_address": "192.0.2.20", "remote_port": 443, "protocol": "TCP", "state": "ESTABLISHED", "pid": 9012, "process_name": "malware.exe", "observed_at": "2026-08-28T10:32:45Z", "risk": 80, "note": "C2 beacon"},
-            {"local_address": "192.0.2.10", "local_port": 5353, "remote_address": "224.0.0.251", "remote_port": 5353, "protocol": "UDP", "state": "LISTEN", "pid": 5678, "process_name": "svchost.exe", "observed_at": "2026-08-28T10:30:00Z", "risk": 0},
-        ]
-        payload.update({"type": "network", "connections": conns, "count": len(conns), "note": "synthetic — no raw socket capture", "mitre": "T1071"})
-        ev_type = "network"
-    elif op.startswith("driver."):
-        payload.update({"type": "driver", "driver": {"name": "RTCore64.sys", "version": "1.0.0", "path": "C:\\Windows\\System32\\drivers\\RTCore64.sys", "publisher": "Micro-Star International", "signature_status": "unsigned", "vulnerable": False, "loldrivers_hit": False, "note": "synthetic scan — no .sys loaded"}, "note": "synthetic"})
-        ev_type = "driver"
     elif op.startswith("memory."):
-        payload.update({"type": "memory", "memory": {"hollowed": False, "note": "synthetic - no dump read"}, "note": "synthetic"})
+        payload.update({"type": "memory", "memory": {"hollowed": False, "note": "synthetic - no dump read", "platform": platform}, "note": "synthetic", "platform": platform})
         ev_type = "memory"
     else:
-        payload.update({"type": t, "note": "synthetic generic"})
+        payload.update({"type": t, "note": "synthetic generic", "platform": platform})
         ev_type = t
     raw = json.dumps(payload, sort_keys=True).encode()
     sha = hashlib.sha256(raw).hexdigest()
@@ -345,6 +394,7 @@ class RunRequest(BaseModel):
     case_id: int = 1
     polymorphic: bool = False
     seed: int = 0
+    platform: Optional[str] = Field(None, description="Target platform: windows|linux — explicit per LANGUAGE_SPEC §27, otherwise auto-detect via providers/factory.py")
 
 def calc_risk(payload: dict) -> int:
     r=0
@@ -428,9 +478,11 @@ def yara_scan_content(content: str) -> tuple[List[str], bool]:
     if not yara_used or not hits:
         fallback=[]
         if "JOCKY_DEMO_MARKER" in content: fallback.append("JOCKY_DEMO_MARKER")
-        if "RTCore64" in content or "RTCore64.sys" in content: fallback.append("BYOVD_RTCore64")
+        if "RTCore64" in content or "RTCore64.sys" in content or "rtc_core" in content.lower(): fallback.append("BYOVD_RTCore64")
         # hollowing signals
         if "hollowed" in content.lower(): fallback.append("Process_Hollowing")
+        if "sample.exe" in content.lower() or "malware.exe" in content.lower(): fallback.append("File_Suspicious_PE")
+        if "192.0.2.20" in content: fallback.append("Network_C2_Beacon")
         if yara_used:
             # merge fallback into yara hits if yara missed due to nocase etc (keep yara as truth but supplement)
             for h in fallback:
@@ -455,13 +507,29 @@ def yara_scan_content(content: str) -> tuple[List[str], bool]:
 @app.get("/health")
 def health():
     yara_rules = _yara_rules_path()
-    return {"status":"ok","service":"jocky-backend","layers":"L5+L6+L7","version":"1.2.0","jocky_ir_version":1, "db": _db_available(), "postgres": _db_available(), "yara": yara_rules is not None, "yara_rules": yara_rules}
+    stor = _storage_status()
+    cach = _cache_status()
+    return {"status":"ok","service":"jocky-backend","layers":"L5+L6+L7","version":"1.2.0","jocky_ir_version":1, "db": _db_available(), "postgres": _db_available(), "yara": yara_rules is not None, "yara_rules": yara_rules,
+            "minio": stor.get("minio_available", False), "redis": cach.get("redis_available", False), "storage": stor, "cache": cach}
 
 @app.get("/api/cases")
 def list_cases():
     cs = _get_cases()
     evs = _get_evidence()
     return {"cases": cs, "count": len(cs), "evidence": len(evs), "db": _db_available()}
+
+class CaseCreate(BaseModel):
+    title: Optional[str] = ""
+    host_id: Optional[str] = "HOST-001"
+
+@app.post("/api/cases")
+def create_case(req: CaseCreate):
+    # Create new case with auto-increment id per ARCHITECTURE §10 case management
+    cs = _get_cases()
+    next_id = max([c.get("id",0) for c in cs], default=0) + 1
+    rec = _add_case(next_id, title=req.title or f"case-{next_id}")
+    # also ensure host association if provided
+    return {"case": rec, "id": next_id, "title": rec.get("title")}
 
 @app.post("/api/evidence")
 def post_evidence(ev: Evidence):
@@ -472,6 +540,19 @@ def post_evidence(ev: Evidence):
     total = len(_get_evidence())
     rec = {"id": f"EV-{datetime.datetime.utcnow().strftime('%Y%m%d')}-{total+1:06d}", "agent_id": ev.agent_id, "type": ev.type, "payload": ev.payload, "sha256": sha, "timestamp": time.time(), "chain_of_custody": f"{sha}:{ev.agent_id}:{time.time()}", "risk": risk, "case_id": 1, "host_id": ev.agent_id, "op": ev.type, "source": "direct_post", "collected_at": datetime.datetime.utcnow().isoformat()+"Z", "observed_at": datetime.datetime.utcnow().isoformat()+"Z", "collector": "jocky-runtime:1.0", "schema_version": 1, "integrity": {"sha256": sha, "verified": True}, "provenance": {"ir_hash": "", "source_hash": "", "capabilities": []}}
     _add_evidence(rec)
+    # Persist artifact to MinIO per ARCHITECTURE §11 + FORENSICS §47
+    try:
+        if _storage:
+            _storage.put_evidence_artifact(rec["id"], json.dumps(rec).encode(), "application/json")
+    except Exception as e:
+        print(f"[storage] evidence artifact failed {rec['id']}: {e}")
+    # Invalidate cache for evidence lists
+    try:
+        if _cache:
+            _cache.cache_invalidate(key="evidence:list:1")
+            _cache.cache_invalidate(key=f"evidence:list:{rec['case_id']}")
+    except Exception:
+        pass
     return rec
 
 @app.post("/api/compile")
@@ -511,11 +592,15 @@ def run_source(req: RunRequest):
     ir_hash = hashlib.sha256(ir.encode()).hexdigest()[:12]
     ensure_case(req.case_id)
     created = []
+    # Platform resolution per ARCHITECTURE.md §8 (same JOCKY, different adapter)
+    platform = (req.platform or "").lower() if req.platform else None
+    if platform not in ("windows","linux", None, ""):
+        raise HTTPException(status_code=400, detail=f"Invalid platform {req.platform!r} — expected windows|linux")
     for op in ops:
         if op == "nop":
             continue
         try:
-            rec = make_envelope(op, req.agent_id, req.host_id, req.case_id, ir_hash, src_hash, caps, req.source)
+            rec = make_envelope(op, req.agent_id, req.host_id, req.case_id, ir_hash, src_hash, caps, req.source, platform)
         except ValueError as ve:
             raise HTTPException(status_code=400, detail=str(ve))
         _add_evidence(rec)
@@ -526,7 +611,7 @@ def run_source(req: RunRequest):
         frec = {"id": fid, "case_id": req.case_id, "evidence_id": rec["id"], "rule": op, "severity": "INFO" if rec["risk"] <30 else "HIGH" if rec["risk"]<80 else "CRITICAL", "risk": rec["risk"], "mitre": mitre}
         _add_finding(frec)
     if not created:
-        rec = make_envelope("system.info", req.agent_id, req.host_id, req.case_id, ir_hash, src_hash, caps, req.source)
+        rec = make_envelope("system.info", req.agent_id, req.host_id, req.case_id, ir_hash, src_hash, caps, req.source, platform)
         rec["payload"]["note"] = "nop run — synthetic placeholder"
         _add_evidence(rec)
         created.append(rec)
@@ -842,14 +927,37 @@ def polymorphic_demo(req: PolyDemoRequest):
 
 @app.get("/api/cases/{case_id}/report")
 def get_report(case_id: int, title: Optional[str] = None):
-    # validate case exists or allow empty report (UX: still generate)
     html = build_report_html(case_id, title)
+    # Try cache first per ARCHITECTURE §11 Redis
+    cache_key = f"report:pdf:{case_id}:{title or ''}"
+    try:
+        if _cache:
+            cached = _cache.cache_get(cache_key)
+            if cached and isinstance(cached, dict) and cached.get("pdf_b64"):
+                import base64
+                pdf = base64.b64decode(cached["pdf_b64"])
+                return StreamingResponse(io.BytesIO(pdf), media_type="application/pdf",
+                    headers={"Content-Disposition": f'attachment; filename=\"JOCKY_case_{case_id}_report.pdf\"', "X-Report-Cached": "true"})
+    except Exception:
+        pass
     try:
         pdf = render_pdf_bytes(html)
+        # Store to MinIO per FORENSICS §64 + ARCHITECTURE §11
+        try:
+            if _storage:
+                _storage.put_report(case_id, pdf)
+        except Exception as e:
+            print(f"[storage] report put failed case {case_id}: {e}")
+        # Cache in Redis (TTL 300s) + mem fallback
+        try:
+            if _cache:
+                import base64
+                _cache.cache_set(cache_key, {"pdf_b64": base64.b64encode(pdf).decode(), "size": len(pdf)}, ttl=300)
+        except Exception:
+            pass
         return StreamingResponse(io.BytesIO(pdf), media_type="application/pdf",
             headers={"Content-Disposition": f'attachment; filename=\"JOCKY_case_{case_id}_report.pdf\"'})
     except Exception as e:
-        # fallback to html if weasyprint deps missing on host test — still testable
         return StreamingResponse(io.BytesIO(html.encode()), media_type="text/html",
             headers={"X-Report-Fallback": str(e)[:200]})
 
@@ -858,8 +966,38 @@ def post_report(req: ReportRequest):
     html = build_report_html(req.case_id, req.title)
     try:
         pdf = render_pdf_bytes(html)
+        try:
+            if _storage:
+                _storage.put_report(req.case_id, pdf)
+        except Exception:
+            pass
         return StreamingResponse(io.BytesIO(pdf), media_type="application/pdf",
             headers={"Content-Disposition": f'attachment; filename=\"JOCKY_case_{req.case_id}_report.pdf\"'})
     except Exception as e:
         return StreamingResponse(io.BytesIO(html.encode()), media_type="text/html",
             headers={"X-Report-Fallback": str(e)[:200]})
+
+# --- Storage/Cache introspection per ARCHITECTURE §11 ---
+@app.get("/api/storage/status")
+def storage_status():
+    return {"storage": _storage_status(), "cache": _cache_status(), "health": {"minio": _storage_status().get("minio_available", False), "redis": _cache_status().get("redis_available", False)}}
+
+@app.post("/api/artifacts/upload")
+def artifact_upload(payload: Dict[str, Any]):
+    """Upload arbitrary artifact to MinIO (evidence/report) — 5MB limit per SECURITY_MODEL §28."""
+    data = json.dumps(payload).encode()
+    if len(data) > 5*1024*1024:
+        raise HTTPException(status_code=413, detail="Artifact too large — max 5MB per SECURITY_MODEL resource limits")
+    key = f"artifacts/{hashlib.sha256(data).hexdigest()[:12]}.json"
+    if _storage:
+        _storage.put_bytes(_storage.BUCKET_EVIDENCE, key, data, "application/json")
+    return {"key": key, "sha256": hashlib.sha256(data).hexdigest(), "size": len(data), "minio": _storage_status().get("minio_available", False)}
+
+@app.get("/api/artifacts/{key:path}")
+def artifact_get(key: str):
+    if _storage:
+        data = _storage.get_bytes(_storage.BUCKET_EVIDENCE, key)
+        if data:
+            return {"key": key, "size": len(data), "sha256": hashlib.sha256(data).hexdigest()}
+    raise HTTPException(status_code=404, detail="Artifact not found")
+
