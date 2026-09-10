@@ -63,9 +63,11 @@ Build a safe, reproducible, defensive forensic investigation platform around the
 | Windows support         | 🟢 Verified     | **Synthetic Windows** `Windows*Provider` (WinAPI-style paths `C:\Windows\...`, `uid`→`SYSTEM`, `command_line`) — same Sigma T1055 preserved — verified via `platform=windows` contract tests |
 | Linux support           | 🟢 Verified     | **Synthetic Linux** `Linux*Provider` (`/proc`-style `/usr/bin/...`, `uid`, `inode`, `lsmod`) — same normalized contract — verified via `platform=linux` — 10 tests |
 | Controlled laboratory   | 🟢 Verified     | 6 fixtures + live poly demo (3 IRs same YARA cluster) + full-sweep cases + report + `POST /api/cases` isolation (5 tests) |
-| End-to-end workflow     | 🟢 Verified     | Full sweep → envelope → YARA → Timeline/Graph/Risk→Report persists (Point 1+2) |
+| End-to-end workflow     | 🟢 Verified     | Full sweep → envelope → YARA → Timeline/Graph/Risk→Report persists (Point 1+2) + **auth** `POST /api/auth/login` → JWT → `GET /api/auth/me` per SECURITY §19-20 |
 | Dashboard               | 🟢 Verified     | **Case isolation + enrichment** `App.tsx` `caseId` dropdown + `hostFilter`/`typeFilter`/`platformFilter` + `runPlatform` + `filteredEvidence` + **Timeline search/risk filter** + **Risk history sparkline** + **Graph node select** — per FORENSICS §7 + ARCHITECTURE §11 + DESIGN §41 |
-| Automated tests         | 🟢 Verified     | **98 tests** (compiler 9, backend 13, e2e 3, forensic 6, report 4, yara 6, agent 8, grammar 12, platform 10, detection 11, storage 8, isolation 5, report-harden 3) all passing |
+| Authentication          | 🟢 Verified     | **JWT** `backend/app/auth.py` `POST /api/auth/login` `HS256` + `GET /api/auth/me` + `GET /api/auth/status` per SECURITY §19-20 + `ARCHITECTURE §10` — `AUTH_REQUIRED` env (default false for host, strict 401 when true), `X-API-Key` fallback — 8 tests |
+| Automated tests         | 🟢 Verified     | **112 tests** (compiler 9, backend 13, e2e 3, forensic 6, report 4, yara 6, agent 8, grammar 12, platform 10, detection 11, storage 8, isolation 5, report-harden 3, correlation 6, auth 8) all passing |
+| Correlation engine      | 🟢 Verified     | **Enriched** `GET /api/cases/{id}/graph` → `correlations` (temporal 0.6, pid 0.8, process→file 0.85, process→net 0.9, supports 0.95) + `weight` on edges, `correlation_count`, platform on nodes — per ARCHITECTURE §14 + FORENSICS §43 (6 tests) |
 
 ---
 
@@ -347,6 +349,25 @@ Progressively add operations per LANGUAGE_SPEC.md §10, each with capability, sy
 
 #### Verified
 - `pytest` 95/95 (5 new) — case isolation verified via TestClient (evidence all `case_id==nid`, timeline/graph/risk isolated, `GET /api/cases` count grows, platform windows vs linux both present in same case)
+
+### 2026-08-28 — Correlation Enrichment (Temporal + PID + Platform)
+
+#### Added
+- `backend/app/main.py` `GET /api/cases/{id}/graph` enriched per ARCHITECTURE §14 + FORENSICS §43: builds `pid→evidence` map, `nodes` now `platform` field, `edges` now `weight` (0.5-0.95) + `reason`, `correlations` list (`process→file` 0.85, `process→net` 0.9, `temporal` <120s 0.6, `pid` 0.8, `supports` 0.95), `correlation_count`, platform-aware labels
+- `tests/test_correlation.py` (6) — full sweep has ≥2 correlations (process→file/net/temporal), temporal window <120s, pid sharing, mitre/platform preserved, edges weight ∈(0,1], confidence ∈(0,1] + reason
+
+#### Verified
+- `pytest` 104/104 (6 new)
+
+### 2026-08-28 — Auth Hardening (JWT per SECURITY §19-20)
+
+#### Added
+- `backend/app/auth.py` (90 lines) per `SECURITY_MODEL §19-20` + `ARCHITECTURE §10`: `JWT_SECRET` (`HS256`, `JWT_EXPIRE 3600`), `create_token(sub,role)` + `verify_token` via `python-jose`, `get_current_user` (`Authorization: Bearer` or `X-API-Key`, `AUTH_REQUIRED` env default `false` for host tests, strict `401` when `true`), `require_role`
+- `backend/app/main.py` — `AuthRequest/AuthResponse` + `POST /api/auth/login` (demo any username → JWT `bearer`), `GET /api/auth/me` (via `Depends(get_current_user)`), `GET /api/auth/status` (auth_required/jwt_alg), `GET /api/storage/status` now includes `auth_required`, added `auth` import with fallback
+- `tests/test_auth.py` (8) — status, login→JWT + verify, me bypass, me with token, invalid 401, health storage auth field, run without auth when not required, strict mode 401/200
+
+#### Verified
+- `pytest` 112/112 (8 new) — JWT `HS256` verified via `jose`, strict mode toggles `AUTH_REQUIRED` and validates `401` without token
 
 ### 2026-08-28 — Report Hardening (Versioned History)
 

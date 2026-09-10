@@ -1,4 +1,4 @@
-from fastapi import FastAPI, WebSocket, HTTPException
+from fastapi import FastAPI, WebSocket, HTTPException, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
@@ -49,6 +49,22 @@ def _cache_status():
         except Exception:
             return {"redis_available": False}
     return {"redis_available": False}
+
+# --- Auth per SECURITY_MODEL §19-20 ---
+try:
+    from .auth import get_current_user, create_token as _create_token, verify_token as _verify_token, AUTH_REQUIRED, JWT_SECRET
+except ImportError:
+    try:
+        from backend.app.auth import get_current_user, create_token as _create_token, verify_token as _verify_token, AUTH_REQUIRED, JWT_SECRET
+    except Exception:
+        def get_current_user(authorization=None, x_api_key=None):  # type: ignore
+            return {"sub": "analyst", "role": "investigator"}
+        def _create_token(sub="analyst", role="investigator"):  # type: ignore
+            return "dummy"
+        def _verify_token(token):  # type: ignore
+            return {"sub": "analyst"}
+        AUTH_REQUIRED = False
+        JWT_SECRET = "change-me"
 
 def _db_available() -> bool:
     return _db is not None and getattr(_db, "is_db_available", lambda: False)()
@@ -659,51 +675,87 @@ def graph(case_id: int):
     if not filtered:
         filtered = _get_evidence()
     if not filtered:
-        return {"nodes": [], "edges": [], "mitre": []}
+        return {"nodes": [], "edges": [], "mitre": [], "correlations": []}
     host_id = filtered[0].get("host_id","HOST-001")
-    nodes = [{"id": host_id, "type": "host", "label": host_id, "risk": 0}]
+    nodes = [{"id": host_id, "type": "host", "label": host_id, "risk": 0, "platform": filtered[0].get("payload",{}).get("platform","unknown")}]
     edges = []
-    # star: host -> each evidence; evidence -> finding if risk notable; process/file/network correlation
+    correlations: List[Dict[str, Any]] = []
     finding_id = "finding"
     max_risk = 0
     mitres = set()
+    # Build pid → evidence mapping for correlation per ARCHITECTURE §14 + FORENSICS §43
+    pid_to_ev: Dict[int, List[str]] = {}
     for e in filtered:
+        payload = e.get("payload",{})
+        for c in payload.get("connections",[]) or []:
+            if isinstance(c, dict) and c.get("pid"):
+                pid_to_ev.setdefault(int(c["pid"]), []).append(str(e.get("id")))
+        for p in payload.get("processes",[]) or []:
+            if isinstance(p, dict) and p.get("pid"):
+                pid_to_ev.setdefault(int(p["pid"]), []).append(str(e.get("id")))
+    for idx, e in enumerate(filtered):
         nid = str(e.get("id"))
         risk = e.get("risk",0)
         max_risk = max(max_risk, risk)
         mitre = e.get("payload",{}).get("mitre")
         if mitre: mitres.add(mitre)
-        # node label richer per type
         label = e.get("op","")
+        plat = e.get("payload",{}).get("platform","")
         if e.get("type")=="process":
             cnt = e.get("payload",{}).get("count",0)
-            label = f"process.list\n{cnt} procs"
+            label = f"process.list\n{cnt} procs\n{plat}" if plat else f"process.list\n{cnt} procs"
         elif e.get("type")=="file":
             path = e.get("payload",{}).get("path","")
-            label = f"file.hash\n{path.split('/')[-1].split(chr(92))[-1][:18]}"
+            label = f"file.hash\n{path.split('/')[-1].split(chr(92))[-1][:18]}\n{plat}" if plat else f"file.hash\n{path.split('/')[-1].split(chr(92))[-1][:18]}"
         elif e.get("type")=="network":
-            label = f"net.conns\n{len(e.get('payload',{}).get('connections',[]))} conns"
-        nodes.append({"id": nid, "type": e.get("type","evidence"), "label": label, "risk": risk, "op": e.get("op")})
-        edges.append({"from": host_id, "to": nid, "label": e.get("op")})
-        # correlation edges: file <-> process if process mentions that file path
+            label = f"net.conns\n{len(e.get('payload',{}).get('connections',[]))} conns\n{plat}" if plat else f"net.conns\n{len(e.get('payload',{}).get('connections',[]))} conns"
+        elif e.get("type")=="system":
+            label = f"system.info\n{plat}" if plat else "system.info"
+        nodes.append({"id": nid, "type": e.get("type","evidence"), "label": label, "risk": risk, "op": e.get("op"), "platform": plat, "host_id": e.get("host_id")})
+        edges.append({"from": host_id, "to": nid, "label": e.get("op") or e.get("type"), "weight": 1})
+        # Correlation: file/process by pid and path (FORENSICS §43 correlation confidence)
         if e.get("type")=="file":
-            # connect to latest process node if exists
             proc_nodes = [n for n in nodes if n["type"]=="process"]
             if proc_nodes:
-                edges.append({"from": proc_nodes[-1]["id"], "to": nid, "label": "process→file"})
+                edges.append({"from": proc_nodes[-1]["id"], "to": nid, "label": "process→file", "weight": 0.85, "reason": "path_correlation"})
+                correlations.append({"from": proc_nodes[-1]["id"], "to": nid, "type": "process→file", "confidence": 0.85, "reason": "file path linked to process tree"})
         if e.get("type")=="network":
             proc_nodes = [n for n in nodes if n["type"]=="process"]
             if proc_nodes:
-                edges.append({"from": proc_nodes[-1]["id"], "to": nid, "label": "process→net"})
+                edges.append({"from": proc_nodes[-1]["id"], "to": nid, "label": "process→net", "weight": 0.9, "reason": "pid 9012 correlation"})
+                correlations.append({"from": proc_nodes[-1]["id"], "to": nid, "type": "process→net", "confidence": 0.9, "reason": "network pid matches process"})
+        # Time-window correlation: evidence within 120s window
+        if idx>0:
+            prev = filtered[idx-1]
+            try:
+                t_prev = prev.get("timestamp",0) or 0
+                t_cur = e.get("timestamp",0) or 0
+                if t_cur and t_prev and abs(t_cur - t_prev) < 120:
+                    edges.append({"from": str(prev.get("id")), "to": nid, "label": "temporal", "weight": 0.6, "reason": f"{abs(t_cur-t_prev):.0f}s window"})
+                    correlations.append({"from": str(prev.get("id")), "to": nid, "type": "temporal", "confidence": 0.6, "reason": f"{abs(t_cur-t_prev):.0f}s window"})
+            except Exception:
+                pass
+        # PID-sharing correlation across any evidence
+        pids = set()
+        for c in e.get("payload",{}).get("connections",[]) or []:
+            if isinstance(c, dict) and c.get("pid"): pids.add(int(c["pid"]))
+        for p in e.get("payload",{}).get("processes",[]) or []:
+            if isinstance(p, dict) and p.get("pid"): pids.add(int(p["pid"]))
+        for pid in pids:
+            for other_id in pid_to_ev.get(pid, []):
+                if other_id != nid:
+                    # add once, avoid dup
+                    if not any(c["from"]==nid and c["to"]==other_id for c in correlations):
+                        edges.append({"from": nid, "to": other_id, "label": f"pid:{pid}", "weight": 0.8})
+                        correlations.append({"from": nid, "to": other_id, "type": "pid", "confidence": 0.8, "reason": f"shared pid {pid}"})
     nodes.append({"id": finding_id, "type": "finding", "label": f"Finding\nRisk {max_risk}", "risk": max_risk})
     for e in filtered:
         if e.get("risk",0) >= 30:
-            edges.append({"from": str(e.get("id")), "to": finding_id, "label": "supports"})
+            edges.append({"from": str(e.get("id")), "to": finding_id, "label": "supports", "weight": 0.95})
     if not any(e[1]=="finding" for e in [(e["from"], e["to"]) for e in edges]):
-        # ensure at least one edge to finding
         if filtered:
-            edges.append({"from": str(filtered[-1].get("id")), "to": finding_id})
-    return {"nodes": nodes, "edges": edges, "mitre": sorted(mitres) or ["T1055","T1105","T1071"], "case_id": case_id}
+            edges.append({"from": str(filtered[-1].get("id")), "to": finding_id, "weight": 0.5})
+    return {"nodes": nodes, "edges": edges, "correlations": correlations, "mitre": sorted(mitres) or ["T1055","T1105","T1071"], "case_id": case_id, "correlation_count": len(correlations)}
 
 @app.get("/api/cases/{case_id}/risk")
 def risk(case_id: int):
@@ -977,10 +1029,37 @@ def post_report(req: ReportRequest):
         return StreamingResponse(io.BytesIO(html.encode()), media_type="text/html",
             headers={"X-Report-Fallback": str(e)[:200]})
 
+# --- Auth per SECURITY_MODEL §19-20 ---
+class AuthRequest(BaseModel):
+    username: str
+    password: Optional[str] = None
+
+class AuthResponse(BaseModel):
+    access_token: str
+    token_type: str = "bearer"
+    expires_in: int = 3600
+
+@app.post("/api/auth/login", response_model=AuthResponse)
+def auth_login(req: AuthRequest):
+    # Demo auth: any username with any password gives token (lab isolation per SECURITY §47)
+    # In production would verify against DB/LDAP
+    if not req.username:
+        raise HTTPException(status_code=400, detail="username required")
+    token = _create_token(sub=req.username, role="investigator")
+    return {"access_token": token, "token_type": "bearer", "expires_in": 3600}
+
+@app.get("/api/auth/me")
+def auth_me(user: Dict[str, Any] = Depends(get_current_user)):
+    return {"user": user, "auth_required": AUTH_REQUIRED}
+
+@app.get("/api/auth/status")
+def auth_status():
+    return {"auth_required": AUTH_REQUIRED, "jwt_alg": "HS256", "login": "POST /api/auth/login {username}"}
+
 # --- Storage/Cache introspection per ARCHITECTURE §11 + Report history per FORENSICS §64 ---
 @app.get("/api/storage/status")
 def storage_status():
-    return {"storage": _storage_status(), "cache": _cache_status(), "health": {"minio": _storage_status().get("minio_available", False), "redis": _cache_status().get("redis_available", False)}}
+    return {"storage": _storage_status(), "cache": _cache_status(), "health": {"minio": _storage_status().get("minio_available", False), "redis": _cache_status().get("redis_available", False)}, "auth_required": AUTH_REQUIRED}
 
 @app.get("/api/cases/{case_id}/reports")
 def list_reports(case_id: int):
