@@ -66,8 +66,9 @@ Build a safe, reproducible, defensive forensic investigation platform around the
 | End-to-end workflow     | 🟢 Verified     | Full sweep → envelope → YARA → Timeline/Graph/Risk→Report persists (Point 1+2) + **auth** `POST /api/auth/login` → JWT → `GET /api/auth/me` per SECURITY §19-20 |
 | Dashboard               | 🟢 Verified     | **Case isolation + enrichment** `App.tsx` `caseId` dropdown + `hostFilter`/`typeFilter`/`platformFilter` + `runPlatform` + `filteredEvidence` + **Timeline search/risk filter** + **Risk history sparkline** + **Graph node select** — per FORENSICS §7 + ARCHITECTURE §11 + DESIGN §41 |
 | Authentication          | 🟢 Verified     | **JWT** `backend/app/auth.py` `POST /api/auth/login` `HS256` + `GET /api/auth/me` + `GET /api/auth/status` per SECURITY §19-20 + `ARCHITECTURE §10` — `AUTH_REQUIRED` env (default false for host, strict 401 when true), `X-API-Key` fallback — 8 tests |
-| Automated tests         | 🟢 Verified     | **112 tests** (compiler 9, backend 13, e2e 3, forensic 6, report 4, yara 6, agent 8, grammar 12, platform 10, detection 11, storage 8, isolation 5, report-harden 3, correlation 6, auth 8) all passing |
+| Automated tests         | 🟢 Verified     | **118 tests** (compiler 9, backend 13, e2e 3, forensic 6, report 4, yara 6, agent 8, grammar 12, platform 10, detection 11, storage 8, isolation 5, report-harden 3, correlation 6, auth 8, timeline 6) all passing |
 | Correlation engine      | 🟢 Verified     | **Enriched** `GET /api/cases/{id}/graph` → `correlations` (temporal 0.6, pid 0.8, process→file 0.85, process→net 0.9, supports 0.95) + `weight` on edges, `correlation_count`, platform on nodes — per ARCHITECTURE §14 + FORENSICS §43 (6 tests) |
+| Timeline / Graph / Risk | 🟢 Verified     | **Detail** `GET /api/cases/{id}/risk/history` + `/risk/breakdown` (per-evidence behavioral+sigma) + `GET /api/cases/{id}/graph/expand?node_id=` (neighbors + payload) — frontend `Timeline` search/minRisk, `RiskGauge` history sparkline + breakdown toggle + `Graph` expand → `selectedNode` chip (6 tests) |
 
 ---
 
@@ -358,6 +359,19 @@ Progressively add operations per LANGUAGE_SPEC.md §10, each with capability, sy
 
 #### Verified
 - `pytest` 104/104 (6 new)
+
+### 2026-08-28 — Timeline / Graph / Risk Detail (Expand + History)
+
+#### Added
+- `backend/app/main.py` — `GET /api/cases/{id}/risk/history` (ordered by timestamp, `cumulative_max` per evidence, per ARCHITECTURE §15), `GET /api/cases/{id}/risk/breakdown` (per-evidence `behavioral`/`sigma` via `detection_engine`, `max_risk`/`level`), `GET /api/cases/{id}/graph/expand` (`node_id` → `evidence` + `neighbors`/`neighbor_evidence`, or `expanded:true` for full graph)
+- `frontend/src/components/Timeline.tsx` — `q` search (id/type/op/host/mitre/payload) + `minRisk` selector (all/≥30/≥60/≥80) + filtered count + `onClick` alert per DESIGN §41
+- `frontend/src/components/RiskGauge.tsx` — `history` sparkline (last 20) already, now `breakdown` toggle (`POST` fetch `/risk/breakdown`) + table `id type risk mitre behavioral.rules` + links to `/risk/history` + `/risk/breakdown`
+- `frontend/src/components/Graph.tsx` — `onSelect` prop + `onNodeClick`
+- `frontend/src/App.tsx` — `riskHistory` (push every `refresh`), `selectedNode` chip with `expand` button (`GET /api/cases/{id}/graph/expand?node_id=`)
+- `tests/test_timeline_graph_risk_detail.py` (6) — risk/history, risk/breakdown, graph/expand node + without node + 404, frontend detail UI presence
+
+#### Verified
+- `pytest` 118/118 (6 new)
 
 ### 2026-08-28 — Auth Hardening (JWT per SECURITY §19-20)
 

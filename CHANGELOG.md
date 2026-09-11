@@ -12,6 +12,16 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/) and [Sem
 - `backend/app/main.py` `GET /api/cases/{id}/graph` → `correlations` (temporal 0.6, pid 0.8, process→file 0.85, process→net 0.9, supports 0.95) + `weight` + `correlation_count` + platform on nodes per `ARCHITECTURE §14` + `FORENSICS §43`
 - `tests/test_correlation.py` (6) — full sweep correlations, temporal window, pid, mitre/platform, weight, confidence
 
+## 2026-08-28 — Timeline / Graph / Risk Detail — Expand + History (118 tests)
+
+### Added
+- `backend/app/main.py` — `GET /api/cases/{id}/risk/history` + `/risk/breakdown` + `GET /api/cases/{id}/graph/expand?node_id=`
+- `frontend/src/components/Timeline.tsx` — search + minRisk filter + filtered count + click
+- `frontend/src/components/RiskGauge.tsx` — history sparkline + breakdown toggle
+- `frontend/src/components/Graph.tsx` — onSelect
+- `frontend/src/App.tsx` — riskHistory + selectedNode expand
+- `tests/test_timeline_graph_risk_detail.py` (6) — history, breakdown, expand node/all/404, UI presence
+
 ## 2026-08-28 — Auth Hardening — JWT per SECURITY §19-20 (112 tests)
 
 ### Added

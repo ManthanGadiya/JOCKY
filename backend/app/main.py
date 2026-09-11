@@ -766,6 +766,67 @@ def risk(case_id: int):
         max_risk = max([e.get("risk",0) for e in all_ev], default=0)
     return {"case_id": case_id, "risk": max_risk, "level": "CRITICAL" if max_risk>80 else "HIGH" if max_risk>60 else "MEDIUM" if max_risk>30 else "LOW"}
 
+@app.get("/api/cases/{case_id}/risk/history")
+def risk_history(case_id: int):
+    """Risk history per ARCHITECTURE §15 — timeline of risk values for case (for sparkline detail)."""
+    filtered = _get_evidence(case_id)
+    if not filtered:
+        filtered = _get_evidence()
+    # build history sorted by timestamp — each point is cumulative max up to that evidence
+    ordered = sorted(filtered, key=lambda x: x.get("timestamp",0) or x.get("observed_at",""))
+    hist = []
+    cur_max = 0
+    for e in ordered:
+        cur_max = max(cur_max, e.get("risk",0))
+        hist.append({"evidence_id": e.get("id"), "timestamp": e.get("observed_at") or e.get("timestamp"), "risk": e.get("risk",0), "cumulative_max": cur_max, "type": e.get("type"), "op": e.get("op")})
+    return {"case_id": case_id, "history": hist, "count": len(hist), "current_max": cur_max}
+
+@app.get("/api/cases/{case_id}/risk/breakdown")
+def risk_breakdown(case_id: int):
+    """Risk breakdown per evidence per FORENSICS_SPEC §45 — contributions via behavioral_scan + yara."""
+    filtered = _get_evidence(case_id)
+    if not filtered:
+        filtered = _get_evidence()
+    out = []
+    try:
+        from .detection_engine import behavioral_scan, sigma_scan  # type: ignore
+        has_det = True
+    except Exception:
+        try:
+            from backend.app.detection_engine import behavioral_scan, sigma_scan  # type: ignore
+            has_det = True
+        except Exception:
+            has_det = False
+            def behavioral_scan(x): return []
+            def sigma_scan(x): return []
+    for e in filtered:
+        payload = e.get("payload",{}) or {}
+        behav = behavioral_scan(payload) if has_det else []
+        sig = sigma_scan(payload) if has_det else []
+        out.append({"id": e.get("id"), "type": e.get("type"), "risk": e.get("risk",0), "behavioral": behav, "sigma": sig, "mitre": payload.get("mitre")})
+    max_risk = max([x["risk"] for x in out], default=0)
+    return {"case_id": case_id, "breakdown": out, "max_risk": max_risk, "level": "CRITICAL" if max_risk>80 else "HIGH" if max_risk>60 else "MEDIUM" if max_risk>30 else "LOW"}
+
+@app.get("/api/cases/{case_id}/graph/expand")
+def graph_expand(case_id: int, node_id: Optional[str] = None):
+    """Graph expand per ARCHITECTURE §14 — neighbors for a node + full evidence payload for detail view."""
+    filtered = _get_evidence(case_id)
+    if node_id:
+        ev = next((e for e in filtered if str(e.get("id"))==node_id), None)
+        if not ev:
+            raise HTTPException(status_code=404, detail="Node not found")
+        # find correlated neighbors via graph correlations
+        g = graph(case_id)
+        neighbors = [c for c in g.get("correlations",[]) if c["from"]==node_id or c["to"]==node_id]
+        neighbor_ids = set([c["from"] for c in neighbors] + [c["to"] for c in neighbors])
+        neighbor_ids.discard(node_id)
+        neighbor_evs = [e for e in filtered if str(e.get("id")) in neighbor_ids]
+        return {"case_id": case_id, "node_id": node_id, "evidence": ev, "neighbors": neighbors, "neighbor_evidence": neighbor_evs, "neighbor_count": len(neighbor_evs)}
+    # no node_id → return full graph with expanded flag
+    g = graph(case_id)
+    g["expanded"] = True
+    return g
+
 @app.get("/api/evidence")
 def list_evidence(case_id: Optional[int] = None):
     evs = _get_evidence(case_id)
