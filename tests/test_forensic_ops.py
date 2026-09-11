@@ -20,15 +20,19 @@ def test_process_list_rich():
     r = c.post('/api/run', json={'source':'process.list();','case_id':32})
     assert r.status_code == 200
     payload = r.json()['evidence'][0]['payload']
-    assert len(payload['processes']) == 4
+    # Phase 15 real: Windows returns >50 live + synthetic injected, Linux synthetic 4 — both satisfy contract ≥4
+    assert len(payload['processes']) >= 4
     assert any(p.get('ppid_anomaly') for p in payload['processes'])
     assert r.json()['risk'] >= 30
+    # Platform contract per FORENSICS §67: each proc has required fields
+    for p in payload['processes'][:5]:
+        assert "pid" in p and "ppid" in p and "name" in p and "path" in p
 
 def test_network_connections():
     r = c.post('/api/run', json={'source':'network.connections();','case_id':33})
     assert r.status_code == 200
     conns = r.json()['evidence'][0]['payload']['connections']
-    assert len(conns) == 2
+    assert len(conns) >= 2
     assert any(cc['remote_address']=="192.0.2.20" for cc in conns)
 
 def test_combined_investigation():

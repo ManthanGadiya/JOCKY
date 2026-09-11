@@ -12,6 +12,12 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/) and [Sem
 - `backend/app/main.py` `GET /api/cases/{id}/graph` → `correlations` (temporal 0.6, pid 0.8, process→file 0.85, process→net 0.9, supports 0.95) + `weight` + `correlation_count` + platform on nodes per `ARCHITECTURE §14` + `FORENSICS §43`
 - `tests/test_correlation.py` (6) — full sweep correlations, temporal window, pid, mitre/platform, weight, confidence
 
+## 2026-08-28 — Phase 15 Cross-Platform Real — Windows Toolhelp32 + Linux /proc via psutil (157 tests)
+
+### Added
+- `backend/requirements.txt` — `psutil==6.1.0`
+- `backend/app/providers/` — live `psutil` + `/proc` + `hashlib` real with fallback synthetic per `ROADMAP Phase 15`, `tests/test_forensic_ops.py` `len>=4` for live, `tests/test_phase15_real.py` (5) — Windows live, Linux synthetic, real file hash, API real, contract
+
 ## 2026-08-28 — Hardening P2 — Resource Limits + Audit (152 tests)
 
 ### Added
