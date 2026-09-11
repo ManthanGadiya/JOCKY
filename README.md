@@ -446,7 +446,7 @@ This makes experiments:
 
 # 🚀 Quick Start
 
-> **Current Status:** Audit complete 2026-08-28. Host compiler and backend API are **verified** without Docker. Docker stack and platform support are **not yet verified** on this host. Treat `docs/STATUS.md` as the authoritative source.
+> **Current Status:** **Ship P3 — 152 tests passing on host (no Docker) + full platform live on `:8000`/`:3000`/`:8082`.** `docs/STATUS.md` is authoritative; this section tracks `main` at `152` (see `docs/STATUS.md §7`). Host fallback `tools/jockyc.py` + `POST /api/run` + YARA 5 + Sigma 2 + MinIO/Redis + JWT all verified via `TestClient`.
 
 ## Prerequisites
 
@@ -492,7 +492,7 @@ python tools/jockyc.py examples/test.jocky --polymorphic -o build/b.ll --seed 2
 python tools/jockyc.py examples/test.jocky --polymorphic -o build/c.ll --seed 3
 # Windows: certutil -hashfile build\a.ll SHA256  (3 hashes must differ)
 # Linux:   sha256sum build/*.ll
-python -m pytest  # (once tests exist — currently 0; backend checked via TestClient in audit)
+python -m pytest -q  # → 152 passed (see docs/STATUS.md §7), or: pytest tests/test_compiler_grammar.py -v etc.
 ```
 
 Expected: 3 distinct SHA256, each file contains `JOCKY_DEMO_MARKER`, `EntryPoint`, `bb.poly.*` blocks when `--polymorphic`.
@@ -806,31 +806,29 @@ Instructions for AI coding agents contributing to the repository.
 
 > This section is intentionally kept short. `docs/STATUS.md` contains the detailed implementation audit with evidence.
 
-**Phase:** Report Generation ✅ Complete — Full Forensic Sweep + PDF Live (2026-08-28)
+**Phase:** **Ship P3 — Full Platform Hardened (2026-08-28 main `152` tests)**
 
-**Verdict:** **Full investigation sweep + correlated graph + PDF report works end-to-end.** `system.info(); process.list(); file.hash(); network.connections();` → 4 envelopes, star graph `host→each + process→file/net` edges, risk 60 MEDIUM, **Report PDF** `GET /api/cases/{id}/report` → 20KB `%PDF`. Docker verified `:8000`/`:3000`/`8082` — 35 tests.
+**Verdict:** **Full forensic chain hardened end-to-end.** `system.info(); process.list(); file.hash("/evidence/sample.exe"); network.connections(); evidence.load("testdata/hollowing.json"); investigation "scan" { ... }` → canonical envelopes `schema_version 1` + `SHA256` + `provenance` + `chain_of_custody`, **YARA 5** + **Sigma 2** + **Behavioral 13 weights** + `POST /api/sigma/tune`/`auto-tune`, **platform** `windows|linux` via `I*Provider` factory, **agent real POST via `nginx:80`**, **MinIO `jocky-reports/jocky-evidence` + Redis** (`GET /api/storage/status`, `POST /api/artifacts`), **JWT** `POST /api/auth/login` (`HS256`), **case isolation UI** + **timeline search/minRisk** + **risk sparkline/history** + **graph expand**, **report versioned history** `GET /api/cases/{id}/reports`, **correlation** `temporal/pid/process→file` (`weight` + `correlation_count`), **resource limits** `413` + **audit** `GET /api/audit` hash-chain, **evidence.load** controlled fixtures.
 
-### Verified (evidence in `docs/STATUS.md §7`, `pytest` 35/35, live `curl` + PDF)
+### Verified (evidence in `docs/STATUS.md §7`, `pytest` 152/152 host, live `curl` + PDF)
 
-* 🟢 `tools/jockyc.py` + `jocky/src/IRGen.cpp` → **IR_VERSION=1**, 3 hashes differ; `edr.disable` → **422**, `memory.analyze` → **403**
-* 🟢 `POST /api/run` enriched: `process.list` 4-proc tree Sigma T1055 risk 60, `file.hash("/evidence/sample.exe")` path-aware YARA T1105 risk 55 (traversal `../../etc/passwd` → **400**), `network.connections` C2 T1071 risk 30; combined sweep 4 evidence risk 60, **star graph** + correlation edges verified on :8000 case 80
-* 🟢 `GET /api/cases/{id}/report` → **`application/pdf` 20KB** (WeasyPrint 62.3 + `pydyf 0.11` pango/cairo in Docker, HTML fallback on host) — verified `build/report_case_80.pdf` `%PDF` — **POST /api/report** also
-* 🟢 `frontend` :3000 — editor **full sweep** default + **📄 Report PDF** button per findings → `fetch GET /report` → download `JOCKY_case_{id}_report.pdf` (handles pdf vs html fallback), live Graph/Timeline/Risk +
-* 🟢 `docker compose ps` — **9 Up** `backend` (pango deps) `:8000`, `frontend` `:3000`, `nginx` 8082, `db` healthy, `redis/minio/jocky/detector`
+* 🟢 `tools/jockyc.py` + `tools/jocky_lexer.py` per `grammar/jocky.g4` + `jocky/src/Lexer.cpp` → **IR_VERSION=1** `IR_CAPS/OPS` `EntryPoint` `JOCKY_DEMO_MARKER` `bb.poly.*`; `edr.disable` → **422** (`at 1:1`) + `memory.analyze` → **403** + `../../etc/passwd` → **400** + `filter`/`correlate` 2-arg validation + `investigation "title"` sets case title
+* 🟢 `POST /api/run` platform-aware `?platform=windows|linux` `I*Provider` (WinAPI `C:\Windows\...` vs `/proc` `uid/inode`) same MITRE `T1055/T1105`; `evidence.load("testdata/hollowing.json")` loads fixture + appears in `timeline/graph/risk` + `investigation` block
+* 🟢 `GET /api/cases/{id}/report` → **`application/pdf` 20KB** (WeasyPrint `pydyf 0.11` pango/cairo in Docker, HTML fallback + `X-Report-Cached` on host) + versioned `GET /api/cases/{id}/reports` + `GET /api/cases/{id}/reports/{key}` (MinIO `jocky-reports`)
+* 🟢 `POST /api/sigma/tune` + `POST /api/sigma/auto-tune` + `GET /api/sigma/rules|status` (confidence `0.5-0.95`, hit-rate `>0.5→0.7`) + `GET /api/storage/status` `minio`/`redis` + `POST /api/artifacts` `413` on `5MB` + `GET /api/audit` hash-chain + `MAX_*_SIZE` limits
+* 🟢 `frontend` `:3000` — editor `Compile/Run (linux|windows)` + case dropdown `+New Case` + `host/type/platform` filters + `filteredEvidence` + **timeline search/minRisk** + **risk sparkline/history/detail** + **graph `onNodeClick` expand** + **reports history** + **sigma tune** panel + **📄 Report PDF** per findings → `JOCKY_case_{id}_report.pdf`
+* 🟢 `docker compose ps` — **9 Up** `backend` (`pango` + `postgres+minio/redis` + `yara 4.5.2` 5 rules) `:8000` `minio:true redis:true yara:5` + `frontend` `:3000` `+New Case` + `nginx` `8082` `db` healthy `pgdata/miniodata` `health db:true yara:true minio/redis`
 
-### Partially Implemented
+### Hardened (formerly Partial / Not Started)
 
-* 🟡 Runtime synthetic only (no WinAPI/ETW `/proc`); Lexer/Parser/AST still stubs (regex whitelist covers spec correctly for now)
-* 🟡 Backend still in-memory (Postgres/Redis/MinIO not persisted — evidence lost on restart)
-* 🟡 Detection still string YARA (YARA binary `.ll` scan pending systematic)
-* 🟡 `testdata/*.json` 6 fixtures + synthetic sweeps (real `evidence.load()` wiring pending)
+* 🟢 `agent/agent.py` real `urllib` via `http://nginx:80` (`GET /health`, `POST /api/evidence` per fixture, `POST /api/run` sweep + fail-closed `422/403` via nginx) `healthcheck curl -sf http://nginx:80/health`
+* 🟢 Lexer `tools/jocky_lexer.py` `lex()` per `g4` + `parse_member_calls()` `line:col` + `validate_and_collect` single source for `jockyc.py` + `backend`; `filter`/`correlate`/`investigation` handled
+* 🟢 `evidence.load()` wired to allowed roots `testdata/` `/app/testdata` `/evidence/` `/tmp/` + traversal `400`, JSON parse, per-case isolated
+* 🟢 Platform `windows.py` vs `linux.py` `get_providers(platform)` per `ARCHITECTURE §8` + `DESIGN §22`
+* 🟢 `yara/rules.yar` 5 rules (`JOCKY_DEMO_MARKER/BYOVD_RTCore64/Process_Hollowing/File_Suspicious_PE/Network_C2_Beacon`) + fallback strings added
+* 🟢 JWT `backend/app/auth.py` `HS256` `POST /api/auth/login` `bearer` + `GET /api/auth/me|status` (`AUTH_REQUIRED` default `false` for host, `401` when `true`)
 
-### Still Not Started
-
-* 🔴 Windows/Linux native providers + BYOVD YARA binary
-* 🔴 Persistence hardening + auth (JWT) + agent mTLS
-
-**Next Milestone:** Persist to Postgres (`sqlalchemy` wire) + YARA binary for `.ll` + richer correlation (filter/sort per `LANGUAGE_SPEC`) — see `docs/STATUS.md §10`.
+**Next:** Polish per `docs/STATUS.md §10.16` (AST visitor full `block/funcDecl`, live `WinAPI`/`/proc` beyond synthetic, report version compare) — otherwise **Ship-ready** for `DEMO_SCRIPT.md` 2-min `docker compose up` → E2E `system.info(); evidence.load("hollowing.json"); investigation "demo" { ... }` → `Graph/Timeline/Risk/Report`.
 
 The status above must be updated when the actual implementation changes.
 
