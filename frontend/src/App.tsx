@@ -57,6 +57,8 @@ export default function App(){
       setTimeline(t.timeline || [])
       const g = await fetch(`${API}/api/cases/${cid}/graph`).then(r=>r.json())
       setGraph(g)
+      try{ const rp = await fetch(`${API}/api/cases/${cid}/reports`).then(x=>x.json()); setReports(rp.reports||[]) }catch{}
+      try{ const sr = await fetch(`${API}/api/sigma/rules`).then(x=>x.json()); setSigmaRules(sr.rules||[]) }catch{}
       const cs = await fetch(`${API}/api/cases`).then(r=>r.json())
       setCases(cs.cases||[])
       // auto-create case 1 if no cases yet (for demo)
@@ -103,6 +105,9 @@ export default function App(){
   const [runPlatform, setRunPlatform] = useState<string>("linux")
   const [riskHistory, setRiskHistory] = useState<number[]>([0])
   const [selectedNode, setSelectedNode] = useState<string | null>(null)
+  // Report history + Sigma per P0-2
+  const [reports, setReports] = useState<any[]>([])
+  const [sigmaRules, setSigmaRules] = useState<any[]>([])
 
   const runExecute = async ()=>{
     setLoading(true); setError("")
@@ -249,6 +254,21 @@ export default function App(){
         </div>
         <div className="col-span-4 space-y-4">
           <RiskGauge risk={risk} history={riskHistory} />
+          {/* Report history — P0-2 per FORENSICS §64 */}
+          <div className="bg-zinc-900 rounded-xl p-4 border border-zinc-800">
+            <h3 className="font-semibold flex justify-between items-center">Reports — History <span className="text-xs bg-zinc-800 px-2 py-1 rounded">{reports.length}</span></h3>
+            {reports.length===0 ? <p className="text-xs text-zinc-500 mt-2">No reports yet — Run then Download PDF, history appears here.</p> :
+              <ul className="mt-2 space-y-1 max-h-40 overflow-auto">{reports.map((r:any)=><li key={r.key} className="text-xs flex justify-between bg-zinc-950 p-1 rounded border border-zinc-800"><span className="truncate mono">{r.key.split('/').pop()}</span><button onClick={async()=>{ const res=await fetch(`${API}/api/cases/${caseId}/reports/${r.key.split('/').pop()}`); const b=await res.blob(); const u=URL.createObjectURL(b); const a=document.createElement('a'); a.href=u; a.download=r.key.split('/').pop(); document.body.appendChild(a); a.click(); a.remove(); URL.revokeObjectURL(u) }} className="text-violet-400 underline ml-2">dl</button></li>)}</ul>}
+            <div className="text-xs text-zinc-500 mt-1"><a className="underline" href={`${API}/api/cases/${caseId}/reports`} target="_blank">/reports</a></div>
+          </div>
+          {/* Sigma rules — P0-2 per ARCHITECTURE §13 */}
+          <div className="bg-zinc-900 rounded-xl p-4 border border-zinc-800">
+            <h3 className="font-semibold">Sigma Rules — Tune</h3>
+            {sigmaRules.length===0 ? <p className="text-xs text-zinc-500 mt-2">No rules — check /api/sigma/rules</p> :
+              <ul className="mt-2 space-y-1">{sigmaRules.map((r:any)=><li key={r.id} className="text-xs flex justify-between bg-zinc-950 p-2 rounded border border-zinc-800"><span><span className="text-violet-400">{r.id}</span> {r.level} {r.mitre} conf {(r.confidence??0.8).toFixed(2)} {r.tuned?'· tuned':''}</span><button onClick={async()=>{ const v=prompt(`New confidence for ${r.id} (0.5-0.95)`); if(!v) return; await fetch(`${API}/api/sigma/tune`,{method:'POST',headers:{'Content-Type':'application/json'},body: JSON.stringify({rule_id:r.id, confidence:Number(v)})}); const jr=await fetch(`${API}/api/sigma/rules`).then(x=>x.json()); setSigmaRules(jr.rules||[]) }} className="text-xs bg-zinc-800 px-2 py-1 rounded">tune</button></li>)}</ul>}
+            <button onClick={async()=>{ await fetch(`${API}/api/sigma/auto-tune`,{method:'POST'}); const jr=await fetch(`${API}/api/sigma/rules`).then(x=>x.json()); setSigmaRules(jr.rules||[]) }} className="text-xs mt-2 bg-amber-600 hover:bg-amber-500 px-3 py-1 rounded">Auto-Tune (hit-rate)</button>
+            <div className="text-xs text-zinc-500 mt-1"><a className="underline" href={`${API}/api/sigma/rules`} target="_blank">/sigma/rules</a> · <a className="underline" href={`${API}/api/sigma/status`} target="_blank">/sigma/status</a></div>
+          </div>
           <div className="bg-zinc-900 rounded-xl p-4 border border-zinc-800">
             <div className="flex justify-between items-center"><h3 className="font-semibold">Findings — Live</h3><button onClick={downloadReport} disabled={loading} className="text-xs bg-violet-600 hover:bg-violet-500 px-3 py-1 rounded disabled:opacity-50">📄 Report PDF</button></div>
             {findings.length===0 ? <p className="text-sm text-zinc-500 mt-2">No findings yet — Run a sweep then download report.</p> :
