@@ -807,6 +807,49 @@ def risk_breakdown(case_id: int):
     max_risk = max([x["risk"] for x in out], default=0)
     return {"case_id": case_id, "breakdown": out, "max_risk": max_risk, "level": "CRITICAL" if max_risk>80 else "HIGH" if max_risk>60 else "MEDIUM" if max_risk>30 else "LOW"}
 
+@app.get("/api/sigma/rules")
+def sigma_rules():
+    if _sigma_tuner:
+        try:
+            return {"rules": _sigma_tuner.get_rules(), "count": len(_sigma_tuner.get_rules())}
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=str(e))
+    raise HTTPException(status_code=500, detail="Sigma tuner not available")
+
+class SigmaTuneRequest(BaseModel):
+    rule_id: str
+    level: Optional[str] = None
+    confidence: Optional[float] = None
+
+@app.post("/api/sigma/tune")
+def sigma_tune(req: SigmaTuneRequest):
+    if not _sigma_tuner:
+        raise HTTPException(status_code=500, detail="Sigma tuner not available")
+    try:
+        r = _sigma_tuner.tune_rule(req.rule_id, level=req.level, confidence=req.confidence)
+        return {"rule": r, "status": "tuned"}
+    except ValueError as ve:
+        raise HTTPException(status_code=400, detail=str(ve))
+
+@app.post("/api/sigma/auto-tune")
+def sigma_auto_tune():
+    if not _sigma_tuner:
+        raise HTTPException(status_code=500, detail="Sigma tuner not available")
+    try:
+        rules = _sigma_tuner.auto_tune(_get_evidence())
+        return {"rules": rules, "status": "auto-tuned", "evidence_count": len(_get_evidence())}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/api/sigma/status")
+def sigma_status():
+    if _sigma_tuner:
+        try:
+            return _sigma_tuner.status()
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=str(e))
+    raise HTTPException(status_code=500, detail="Sigma tuner not available")
+
 @app.get("/api/cases/{case_id}/graph/expand")
 def graph_expand(case_id: int, node_id: Optional[str] = None):
     """Graph expand per ARCHITECTURE §14 — neighbors for a node + full evidence payload for detail view."""
@@ -1089,6 +1132,15 @@ def post_report(req: ReportRequest):
     except Exception as e:
         return StreamingResponse(io.BytesIO(html.encode()), media_type="text/html",
             headers={"X-Report-Fallback": str(e)[:200]})
+
+# --- Sigma auto-tune per ARCHITECTURE §13 + FORENSICS §34 ---
+try:
+    from . import sigma_tuner as _sigma_tuner
+except ImportError:
+    try:
+        import backend.app.sigma_tuner as _sigma_tuner
+    except Exception:
+        _sigma_tuner = None
 
 # --- Auth per SECURITY_MODEL §19-20 ---
 class AuthRequest(BaseModel):
