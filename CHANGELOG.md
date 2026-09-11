@@ -12,6 +12,12 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/) and [Sem
 - `backend/app/main.py` `GET /api/cases/{id}/graph` → `correlations` (temporal 0.6, pid 0.8, process→file 0.85, process→net 0.9, supports 0.95) + `weight` + `correlation_count` + platform on nodes per `ARCHITECTURE §14` + `FORENSICS §43`
 - `tests/test_correlation.py` (6) — full sweep correlations, temporal window, pid, mitre/platform, weight, confidence
 
+## 2026-08-28 — Sigma Auto-Tune — Per-Evidence Tuning (124 tests)
+
+### Added
+- `backend/app/sigma_tuner.py` — `get_rules`/`tune_rule`/`auto_tune` (confidence 0.5-0.95, hit-rate >0.5→0.7) + `GET /api/sigma/rules` + `POST /api/sigma/tune` + `POST /api/sigma/auto-tune` + `GET /api/sigma/status`
+- `tests/test_sigma_tuning.py` (6) — rules, tune 0.75, invalid 400, auto_tune, direct
+
 ## 2026-08-28 — Timeline / Graph / Risk Detail — Expand + History (118 tests)
 
 ### Added
