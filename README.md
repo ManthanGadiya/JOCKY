@@ -446,7 +446,7 @@ This makes experiments:
 
 # 🚀 Quick Start
 
-> **Current Status:** **Ship P3 — 152 tests passing on host (no Docker) + full platform live on `:8000`/`:3000`/`:8082`.** `docs/STATUS.md` is authoritative; this section tracks `main` at `152` (see `docs/STATUS.md §7`). Host fallback `tools/jockyc.py` + `POST /api/run` + YARA 5 + Sigma 2 + MinIO/Redis + JWT all verified via `TestClient`.
+> **Current Status:** **Ship P3 + Phase 15 Real — 157 tests passing on host (no Docker) + full platform live on `:8000`/`:3000`/`:8082`.** `docs/STATUS.md` is authoritative; this section tracks `main` at `157` (see `docs/STATUS.md §7`). Host fallback `tools/jockyc.py` + `POST /api/run` `platform=windows|linux` + `evidence.load("testdata/hollowing.json")` + `investigation "title" {}` + YARA 5 + Sigma 2 `auto-tune` + MinIO/Redis `jocky-reports` + JWT + `psutil` `Toolhelp32`/`/proc` live + fallback synthetic all verified via `TestClient` + Docker `agent` real POST via `nginx:80`.
 
 ## Prerequisites
 
@@ -492,7 +492,15 @@ python tools/jockyc.py examples/test.jocky --polymorphic -o build/b.ll --seed 2
 python tools/jockyc.py examples/test.jocky --polymorphic -o build/c.ll --seed 3
 # Windows: certutil -hashfile build\a.ll SHA256  (3 hashes must differ)
 # Linux:   sha256sum build/*.ll
-python -m pytest -q  # → 152 passed (see docs/STATUS.md §7), or: pytest tests/test_compiler_grammar.py -v etc.
+python -m pytest -q  # → 157 passed (see docs/STATUS.md §7), or: pytest tests/test_compiler_grammar.py -v etc.
+
+# Evidence.load wiring demo (P0):
+python -c "from fastapi.testclient import TestClient; from backend.app.main import app; c=TestClient(app); print(c.post('/api/run', json={'source': 'evidence.load(\"testdata/hollowing.json\");', 'case_id': 1}).json()['evidence'][0]['payload']['source'])"
+# → evidence.load
+
+# Platform-aware demo (Phase 15):
+curl -X POST http://localhost:8000/api/run -H "Content-Type: application/json" -d "{\"source\":\"process.list();\",\"case_id\":1,\"platform\":\"windows\"}" | python -m json.tool | grep platform
+curl -X POST http://localhost:8000/api/run -H "Content-Type: application/json" -d "{\"source\":\"process.list();\",\"case_id\":1,\"platform\":\"linux\"}" | python -m json.tool | grep platform
 ```
 
 Expected: 3 distinct SHA256, each file contains `JOCKY_DEMO_MARKER`, `EntryPoint`, `bb.poly.*` blocks when `--polymorphic`.
@@ -502,7 +510,8 @@ Expected: 3 distinct SHA256, each file contains `JOCKY_DEMO_MARKER`, `EntryPoint
 The first build pulls `clang/llvm-dev/cmake/ninja/openjdk-17/antlr4` **inside** the image — no host LLVM required:
 
 ```bash
-docker compose build          # ~10 min first time
+docker compose build          # ~10 min first time (pulls ubuntu:22.04 + python:3.11-slim + node:20-alpine + yara + pango + psutil)
+# If auth.docker.io flakes, retry: docker compose build agent backend  # uses cached ubuntu/python, no node pull
 docker compose run --rm jocky bash -c "jockyc examples/test.jocky -o /tmp/a.ll --seed 1 && jockyc examples/test.jocky --polymorphic -o /tmp/b.ll --seed 2 && jockyc examples/test.jocky --polymorphic -o /tmp/c.ll --seed 3 && sha256sum /tmp/*.ll"
 # Must show 3 different hashes → Point 1+2 proven inside Docker as well
 ```
@@ -806,18 +815,18 @@ Instructions for AI coding agents contributing to the repository.
 
 > This section is intentionally kept short. `docs/STATUS.md` contains the detailed implementation audit with evidence.
 
-**Phase:** **Ship P3 — Full Platform Hardened (2026-08-28 main `152` tests)**
+**Phase:** **Ship P3 + Phase 15 Real — Full Platform Hardened (2026-08-28 main `157` tests, `psutil` live + fallback)**
 
-**Verdict:** **Full forensic chain hardened end-to-end.** `system.info(); process.list(); file.hash("/evidence/sample.exe"); network.connections(); evidence.load("testdata/hollowing.json"); investigation "scan" { ... }` → canonical envelopes `schema_version 1` + `SHA256` + `provenance` + `chain_of_custody`, **YARA 5** + **Sigma 2** + **Behavioral 13 weights** + `POST /api/sigma/tune`/`auto-tune`, **platform** `windows|linux` via `I*Provider` factory, **agent real POST via `nginx:80`**, **MinIO `jocky-reports/jocky-evidence` + Redis** (`GET /api/storage/status`, `POST /api/artifacts`), **JWT** `POST /api/auth/login` (`HS256`), **case isolation UI** + **timeline search/minRisk** + **risk sparkline/history** + **graph expand**, **report versioned history** `GET /api/cases/{id}/reports`, **correlation** `temporal/pid/process→file` (`weight` + `correlation_count`), **resource limits** `413` + **audit** `GET /api/audit` hash-chain, **evidence.load** controlled fixtures.
+**Verdict:** **Full forensic chain hardened end-to-end — Phase 15 Real live.** `system.info(); process.list(); file.hash("/evidence/sample.exe"); network.connections(); evidence.load("testdata/hollowing.json"); investigation "scan" { ... }` → canonical envelopes `schema_version 1` + `SHA256` + `provenance` + `chain_of_custody`, **YARA 5** + **Sigma 2** + **Behavioral 13 weights** + `POST /api/sigma/tune`/`auto-tune`, **platform** `windows|linux` via `I*Provider` factory **live `psutil 6.1.0` `Toolhelp32`/`/proc` + `hashlib` real on allowed roots + fallback synthetic per `SECURITY §47`**, **agent real POST via `nginx:80`** (handles `timeline.json` list + `polymorphic_files.json` demo + ISO `timestamp` `Any`), **MinIO `jocky-reports/jocky-evidence` + Redis** (`GET /api/storage/status`, `POST /api/artifacts`), **JWT** `POST /api/auth/login` (`HS256`), **case isolation UI** + **timeline search/minRisk** + **risk sparkline/history** + **graph expand**, **report versioned history** `GET /api/cases/{id}/reports`, **correlation** `temporal/pid/process→file` (`weight` + `correlation_count`), **resource limits** `413` + **audit** `GET /api/audit` hash-chain, **evidence.load** controlled fixtures.
 
-### Verified (evidence in `docs/STATUS.md §7`, `pytest` 152/152 host, live `curl` + PDF)
+### Verified (evidence in `docs/STATUS.md §7`, `pytest` 157/157 host, live `curl` + PDF)
 
 * 🟢 `tools/jockyc.py` + `tools/jocky_lexer.py` per `grammar/jocky.g4` + `jocky/src/Lexer.cpp` → **IR_VERSION=1** `IR_CAPS/OPS` `EntryPoint` `JOCKY_DEMO_MARKER` `bb.poly.*`; `edr.disable` → **422** (`at 1:1`) + `memory.analyze` → **403** + `../../etc/passwd` → **400** + `filter`/`correlate` 2-arg validation + `investigation "title"` sets case title
-* 🟢 `POST /api/run` platform-aware `?platform=windows|linux` `I*Provider` (WinAPI `C:\Windows\...` vs `/proc` `uid/inode`) same MITRE `T1055/T1105`; `evidence.load("testdata/hollowing.json")` loads fixture + appears in `timeline/graph/risk` + `investigation` block
-* 🟢 `GET /api/cases/{id}/report` → **`application/pdf` 20KB** (WeasyPrint `pydyf 0.11` pango/cairo in Docker, HTML fallback + `X-Report-Cached` on host) + versioned `GET /api/cases/{id}/reports` + `GET /api/cases/{id}/reports/{key}` (MinIO `jocky-reports`)
-* 🟢 `POST /api/sigma/tune` + `POST /api/sigma/auto-tune` + `GET /api/sigma/rules|status` (confidence `0.5-0.95`, hit-rate `>0.5→0.7`) + `GET /api/storage/status` `minio`/`redis` + `POST /api/artifacts` `413` on `5MB` + `GET /api/audit` hash-chain + `MAX_*_SIZE` limits
+* 🟢 `POST /api/run` **live** `platform=windows` `psutil` `Toolhelp32` 50+ `exe/username` `source_adapter: psutil live` vs `platform=linux` `/proc` `uid/inode` real `hash_file` (`hashlib` on `/evidence/ /tmp/ testdata`) + fallback synthetic per `SECURITY §47`; same MITRE `T1055/T1105`; `evidence.load("testdata/hollowing.json")` loads fixture (`memory hollowed`) + `source_file` + `platform` + appears in `timeline/graph/risk` + `investigation` block
+* 🟢 `GET /api/cases/{id}/report` → **`application/pdf` 20KB** (WeasyPrint `pydyf 0.11` pango/cairo in Docker, HTML fallback + `X-Report-Cached` on host) + versioned `GET /api/cases/{id}/reports` + `GET /api/cases/{id}/reports/{key}` (MinIO `jocky-reports`, `X-Report-Cached`)
+* 🟢 `POST /api/sigma/tune` + `POST /api/sigma/auto-tune` + `GET /api/sigma/rules|status` (confidence `0.5-0.95`, hit-rate `>0.5→0.7`) + `GET /api/storage/status` `minio`/`redis` (`backend` healthcheck `python urllib` not `curl`) + `POST /api/artifacts` `413` on `5MB` + `GET /api/audit` hash-chain + `MAX_*_SIZE` limits
 * 🟢 `frontend` `:3000` — editor `Compile/Run (linux|windows)` + case dropdown `+New Case` + `host/type/platform` filters + `filteredEvidence` + **timeline search/minRisk** + **risk sparkline/history/detail** + **graph `onNodeClick` expand** + **reports history** + **sigma tune** panel + **📄 Report PDF** per findings → `JOCKY_case_{id}_report.pdf`
-* 🟢 `docker compose ps` — **9 Up** `backend` (`pango` + `postgres+minio/redis` + `yara 4.5.2` 5 rules) `:8000` `minio:true redis:true yara:5` + `frontend` `:3000` `+New Case` + `nginx` `8082` `db` healthy `pgdata/miniodata` `health db:true yara:true minio/redis`
+* 🟢 `docker compose ps` — **9 Up** `backend` (`pango` + `postgres+minio/redis` + `yara 4.5.2` 5 rules + `psutil`) `:8000` `health: python urllib` `minio:true redis:true yara:5` + `frontend` `:3000` `+New Case` + `nginx` `8082` `db` healthy `pgdata/miniodata` `health db:true pg_isready -d jockydb` `agent` real POST via `nginx:80` `healthcheck curl -sf http://nginx:80/health` (6 fixtures → all `200`)
 
 ### Hardened (formerly Partial / Not Started)
 

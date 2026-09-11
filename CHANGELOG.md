@@ -6,6 +6,16 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/) and [Sem
 
 ## [Unreleased]
 
+## 2026-09-11 — Docker All Issues — healthcheck + agent timestamp/list (157 tests, no new count)
+
+### Fixed
+- `backend/app/main.py` `Evidence.timestamp: Optional[Any]` (was `Optional[float]`) — accepts ISO `"2026-07-24T..."` from fixtures → fixes `422 float_parsing` for `hollowing.json`/`byovd_driver.json` via `agent` `POST /api/evidence`
+- `agent/agent.py` `post_fixture` — wraps `timeline.json` list → `timeline` + `polymorphic_files.json` demo → `file`, strips string `timestamp` (let backend generate float) → fixes `AttributeError list.get` + `422`
+- `docker-compose.yml` `db` `healthcheck: pg_isready -U jocky -d jockydb` (was `-U jocky` → `FATAL database jocky does not exist`), `backend` `healthcheck` `python -c urllib.request` (was `curl` not in `python:3.11-slim`), `restart: unless-stopped` + `agent depends_on: backend:service_healthy` (no more `502` on first `GET /health`)
+
+### Changed
+- `agent/Dockerfile` rebuild marker comment to force `docker compose build agent backend` cache bust
+
 ## 2026-08-28 — Correlation Enrichment — Temporal + PID + Platform (104 tests)
 
 ### Added

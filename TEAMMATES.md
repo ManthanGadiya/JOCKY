@@ -30,7 +30,7 @@ Do not invent team members, responsibilities, or contributions.
 
 | Member  | Role                     | Primary Ownership                                      | Secondary Ownership                  |
 | ------- | ------------------------ | ------------------------------------------------------ | ------------------------------------ |
-| Manthan | Project Lead / Developer | Architecture, integration, compiler/platform direction | Documentation, testing, final review |
+| Manthan | Project Lead / Developer | Architecture, integration, compiler/platform direction + Phase 15 Real `psutil`/`/proc` live + Docker health (`pg_isready -d jockydb`, `python urllib` healthcheck) | Documentation, testing, final review, `fix/docker-all-issues` (`Evidence.timestamp Any`, `timeline.json` list wrap) |
 | TBD     | Developer                | TBD                                                    | TBD                                  |
 | TBD     | Developer                | TBD                                                    | TBD                                  |
 | TBD     | Developer                | TBD                                                    | TBD                                  |
@@ -613,18 +613,19 @@ Use this matrix once the actual team is finalized.
 | Area          | Primary | Reviewer | Backup |
 | ------------- | ------- | -------- | ------ |
 | Architecture  | Manthan | TBD      | TBD    |
-| Language      | TBD     | Manthan  | TBD    |
-| Compiler      | TBD     | TBD      | TBD    |
-| IR            | TBD     | Manthan  | TBD    |
-| Runtime       | TBD     | TBD      | TBD    |
-| Agent         | TBD     | TBD      | TBD    |
-| Forensics     | TBD     | TBD      | TBD    |
-| Backend       | TBD     | TBD      | TBD    |
-| Detection     | TBD     | TBD      | TBD    |
-| Frontend      | TBD     | TBD      | TBD    |
-| Testing       | All     | Manthan  | TBD    |
-| Documentation | All     | Manthan  | TBD    |
+| Language      | Manthan | TBD      | TBD    |
+| Compiler      | Manthan | TBD      | TBD    |
+| IR            | Manthan | TBD      | TBD    |
+| Runtime       | Manthan | TBD      | TBD    |
+| Agent         | Manthan | TBD      | TBD    |
+| Forensics     | Manthan | TBD      | TBD    |
+| Backend       | Manthan | TBD      | TBD    |
+| Detection     | Manthan | TBD      | TBD    |
+| Frontend      | Manthan | TBD      | TBD    |
+| Testing       | Manthan | All      | TBD    |
+| Documentation | Manthan | All      | TBD    |
 | Integration   | Manthan | All      | TBD    |
+| Docker        | Manthan | All      | TBD    |
 
 ---
 
