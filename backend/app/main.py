@@ -608,6 +608,8 @@ def create_case(req: CaseCreate):
 @app.post("/api/evidence")
 def post_evidence(ev: Evidence):
     raw = json.dumps(ev.payload, sort_keys=True).encode()
+    if len(raw) > MAX_EVIDENCE_SIZE:
+        raise HTTPException(status_code=413, detail=f"Evidence too large ({len(raw)} > {MAX_EVIDENCE_SIZE}) per SECURITY §28")
     sha = hashlib.sha256(raw).hexdigest()
     risk = calc_risk(ev.payload)
     # generate id that is unique across DB + memory
@@ -627,14 +629,28 @@ def post_evidence(ev: Evidence):
             _cache.cache_invalidate(key=f"evidence:list:{rec['case_id']}")
     except Exception:
         pass
+    if _audit:
+        try: _audit.log_event(ev.agent_id, "evidence.submit", rec["id"], "success", {"type": ev.type, "risk": risk})
+        except Exception: pass
     return rec
 
 @app.post("/api/compile")
 def compile_source(req: CompileRequest):
+    # Resource limits per SECURITY §28
+    if len(req.source) > MAX_SOURCE_SIZE:
+        raise HTTPException(status_code=413, detail=f"JOCKY source too large ({len(req.source)} > {MAX_SOURCE_SIZE}) per SECURITY resource limits")
     try:
         ir, ops, caps = generate_ir(req.source, req.seed, req.polymorphic)
     except ValueError as e:
+        if _audit:
+            try: _audit.log_event("unknown", "compile", "ir", "rejected", {"error": str(e)[:200]})
+            except Exception: pass
         raise HTTPException(status_code=422, detail=str(e))
+    if len(ir) > MAX_IR_SIZE:
+        raise HTTPException(status_code=413, detail=f"IR too large ({len(ir)} > {MAX_IR_SIZE})")
+    if _audit:
+        try: _audit.log_event("compile", "compile", f"source:{req.source[:20]}", "success", {"ops": ops})
+        except Exception: pass
     src_hash = hashlib.sha256(req.source.encode()).hexdigest()[:12]
     ir_hash = hashlib.sha256(ir.encode()).hexdigest()[:12]
     return {
@@ -650,14 +666,25 @@ def compile_source(req: CompileRequest):
 
 @app.post("/api/run")
 def run_source(req: RunRequest):
+    # Resource limits per SECURITY §28
+    if len(req.source) > MAX_SOURCE_SIZE:
+        raise HTTPException(status_code=413, detail=f"JOCKY source too large ({len(req.source)} > {MAX_SOURCE_SIZE})")
     # 1. compile + validate
     try:
         ir, ops, caps = generate_ir(req.source, req.seed, req.polymorphic)
     except ValueError as e:
+        if _audit:
+            try: _audit.log_event(req.agent_id, "run.compile", f"case:{req.case_id}", "rejected", {"error": str(e)[:200]})
+            except Exception: pass
         raise HTTPException(status_code=422, detail=str(e))
+    if len(ir) > MAX_IR_SIZE:
+        raise HTTPException(status_code=413, detail=f"IR too large ({len(ir)} > {MAX_IR_SIZE})")
     # 2. capability policy check (fail-closed)
     denied = [c for c in caps if not DEFAULT_POLICY.get(c, False)]
     if denied:
+        if _audit:
+            try: _audit.log_event(req.agent_id, "run.capability_denied", f"case:{req.case_id}", "denied", {"denied": denied})
+            except Exception: pass
         raise HTTPException(status_code=403, detail=f"Capability denied by policy: {', '.join(denied)} — fail-closed.")
     if not ops:
         ops = ["nop"]
@@ -706,6 +733,9 @@ def run_source(req: RunRequest):
         created.append(rec)
     max_risk = max([e.get("risk",0) for e in _get_evidence(req.case_id)], default=0)
     _update_case_risk(req.case_id, max_risk)
+    if _audit:
+        try: _audit.log_event(req.agent_id, "run.execute", f"case:{req.case_id}", "success", {"ops": ops, "evidence": len(created), "risk": max_risk})
+        except Exception: pass
     return {
         "ir": ir,
         "ir_version": 1,
@@ -922,6 +952,16 @@ def sigma_status():
         except Exception as e:
             raise HTTPException(status_code=500, detail=str(e))
     raise HTTPException(status_code=500, detail="Sigma tuner not available")
+
+@app.get("/api/audit")
+def audit_log(limit: int = 50, action: Optional[str] = None, actor: Optional[str] = None):
+    if _audit:
+        try:
+            evs = _audit.get_events(limit=limit, action=action, actor=actor)
+            return {"events": evs, "count": len(evs)}
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=str(e))
+    return {"events": [], "count": 0}
 
 @app.get("/api/cases/{case_id}/graph/expand")
 def graph_expand(case_id: int, node_id: Optional[str] = None):
@@ -1206,14 +1246,22 @@ def post_report(req: ReportRequest):
         return StreamingResponse(io.BytesIO(html.encode()), media_type="text/html",
             headers={"X-Report-Fallback": str(e)[:200]})
 
-# --- Sigma auto-tune per ARCHITECTURE §13 + FORENSICS §34 ---
+# --- Audit + Sigma per SECURITY §34 + ARCHITECTURE §13 ---
 try:
+    from . import audit as _audit
     from . import sigma_tuner as _sigma_tuner
 except ImportError:
     try:
+        import backend.app.audit as _audit
         import backend.app.sigma_tuner as _sigma_tuner
     except Exception:
+        _audit = None
         _sigma_tuner = None
+
+# Resource limits per SECURITY_MODEL §28 + DESIGN §53
+MAX_IR_SIZE = int(os.getenv("MAX_IR_SIZE", "102400"))  # 100KB
+MAX_EVIDENCE_SIZE = int(os.getenv("MAX_EVIDENCE_SIZE", str(5*1024*1024)))  # 5MB
+MAX_SOURCE_SIZE = int(os.getenv("MAX_SOURCE_SIZE", "50000"))  # 50KB JOCKY source
 
 # --- Auth per SECURITY_MODEL §19-20 ---
 class AuthRequest(BaseModel):
