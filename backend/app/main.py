@@ -454,7 +454,7 @@ class Evidence(BaseModel):
     type: str
     payload: dict
     sha256: Optional[str] = None
-    timestamp: Optional[float] = None
+    timestamp: Optional[Any] = None  # ISO string or float — fixtures use "2026-07-24T10:32:03Z", direct POST may use float
 
 class CompileRequest(BaseModel):
     source: str = Field(..., description="JOCKY source text")
