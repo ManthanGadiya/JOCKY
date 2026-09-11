@@ -59,15 +59,50 @@ def http_post_json(path: str, payload: dict, timeout=10):
 def post_fixture_via_nginx(fixture_path: pathlib.Path, case_id: int):
     """POST a testdata fixture through nginx → POST /api/evidence"""
     raw = json.loads(fixture_path.read_text(encoding="utf-8"))
-    # Normalize to Evidence schema expected by backend: {agent_id, type, payload}
-    # payload is the whole fixture body so integrity is preserved per FORENSICS_SPEC §26
-    ev_type = raw.get("type", "unknown")
-    body = {
-        "agent_id": raw.get("agent_id", AGENT_ID),
-        "type": ev_type,
-        "payload": raw,
-        "timestamp": raw.get("timestamp"),
-    }
+    # Handle fixtures that are lists (e.g., timeline.json) or dicts without type
+    if isinstance(raw, list):
+        # list fixture (e.g., timeline.json) — wrap as timeline type, send first element or whole list as payload
+        # per FORENSICS_SPEC §39 timeline events — send as single timeline evidence
+        if len(raw) == 0:
+            log(f"Skipping empty list fixture {fixture_path.name}")
+            return False, "empty list"
+        # If list contains event dicts, send as type=timeline with payload containing events
+        raw_wrapped = {"type": "timeline", "events": raw, "count": len(raw), "note": f"wrapped {fixture_path.name} list per FORENSICS §39"}
+        ev_type = "timeline"
+        payload = raw_wrapped
+        body = {"agent_id": AGENT_ID, "type": ev_type, "payload": payload}
+        status, resp = http_post_json("/api/evidence", body)
+        if status == 200:
+            j = json.loads(resp)
+            log(f"POST /api/evidence via nginx {fixture_path.name} (list {len(raw)} events) → {j.get('id')} risk={j.get('risk')}")
+            return True, j
+        else:
+            log(f"POST /api/evidence via nginx {fixture_path.name} (list) FAILED status={status} resp={resp[:300]}")
+            return False, resp
+    # dict fixture
+    if isinstance(raw, dict):
+        # Handle demo fixture like polymorphic_files.json which is not forensic evidence (has demo/builds)
+        if "demo" in raw and "builds" not in raw.get("type","") and raw.get("type") is None:
+            # polymorphic_files.json — demo artifact, treat as file evidence with payload containing demo
+            raw_wrapped = {"type": "file", "demo": raw.get("demo"), "builds": raw.get("builds"), "yara_cluster": raw.get("yara_cluster"), "behavior": raw.get("behavior"), "note": f"demo {fixture_path.name}"}
+            raw = raw_wrapped
+        ev_type = raw.get("type", "unknown")
+        # Map unknown demo types to file/timeline
+        if ev_type == "unknown" and "demo" in raw:
+            ev_type = "file"
+        body = {
+            "agent_id": raw.get("agent_id", AGENT_ID),
+            "type": ev_type if ev_type != "unknown" else "evidence",
+            "payload": raw,
+            "timestamp": raw.get("timestamp") if isinstance(raw.get("timestamp"), (int,float)) else None,
+        }
+    else:
+        # raw is scalar (unlikely) — wrap
+        body = {"agent_id": AGENT_ID, "type": "unknown", "payload": {"raw": raw}}
+    # Don't send string timestamp to backend — let backend generate its own (avoids float_parsing 422)
+    # Remove None timestamp so backend uses default
+    if body.get("timestamp") is None:
+        body.pop("timestamp", None)
     status, resp = http_post_json("/api/evidence", body)
     if status == 200:
         j = json.loads(resp)
