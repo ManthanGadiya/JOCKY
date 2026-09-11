@@ -12,6 +12,12 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/) and [Sem
 - `backend/app/main.py` `GET /api/cases/{id}/graph` → `correlations` (temporal 0.6, pid 0.8, process→file 0.85, process→net 0.9, supports 0.95) + `weight` + `correlation_count` + platform on nodes per `ARCHITECTURE §14` + `FORENSICS §43`
 - `tests/test_correlation.py` (6) — full sweep correlations, temporal window, pid, mitre/platform, weight, confidence
 
+## 2026-08-28 — Evidence.load Wiring — Controlled Fixtures (133 tests)
+
+### Added
+- `backend/app/main.py` — `evidence.load` wired (allowed roots, JSON parse, type/platform, source_file, per-case isolated)
+- `tests/test_evidence_load.py` (9) — hollowing, byovd, platform agnostic, traversal, missing arg, not-found, timeline/graph, combine, lexer
+
 ## 2026-08-28 — Sigma Auto-Tune — Per-Evidence Tuning (124 tests)
 
 ### Added

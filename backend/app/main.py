@@ -359,6 +359,54 @@ def make_envelope(op: str, agent_id: str, host_id: str, case_id: int, ir_hash: s
     elif op == "system.info":
         payload.update({"type": "system", "hostname": host_id, "os": platform, "arch": "x86_64", "kernel": f"5.15-jocky-{platform}", "jocky_version": "1.0", "agent_id": agent_id, "boot_time": "2026-08-28T00:00:00Z", "timezone": "UTC", "platform": platform})
         ev_type = "system"
+    elif op == "evidence.load":
+        # Per LANGUAGE_SPEC §28 + IR_SPEC §18.1 + FORENSICS §61: load controlled fixture as evidence
+        raw_path = extract_file_arg(source, op) or ""
+        if not raw_path:
+            raise ValueError(f"evidence.load requires path arg — got: {source!r}")
+        validate_path(raw_path)
+        # Resolve allowed roots per SECURITY §26-27 (evidence roots)
+        import pathlib as _pl
+        candidates = [
+            _pl.Path(raw_path),
+            _pl.Path("/app") / raw_path.lstrip("/"),
+            _pl.Path("/app/testdata") / _pl.Path(raw_path).name,
+            _pl.Path("testdata") / _pl.Path(raw_path).name,
+            _pl.Path(".") / raw_path,
+            _pl.Path("yara") / _pl.Path(raw_path).name,
+        ]
+        # Also handle bare filename like "hollowing.json"
+        if "/" not in raw_path and "\\" not in raw_path:
+            candidates.insert(0, _pl.Path("testdata") / raw_path)
+            candidates.insert(1, _pl.Path("/app/testdata") / raw_path)
+        found = None
+        for cand in candidates:
+            try:
+                if cand.exists() and cand.is_file():
+                    found = cand
+                    break
+            except Exception:
+                continue
+        if not found:
+            raise ValueError(f"evidence.load: fixture not found {raw_path!r} — checked {', '.join(str(c) for c in candidates[:3])} (allowed roots: /evidence/, /tmp/, testdata/)")
+        try:
+            content = found.read_text(encoding="utf-8")
+            data = json.loads(content) if content.strip().startswith(("{","[")) else {"raw": content}
+        except Exception as e:
+            raise ValueError(f"evidence.load failed to parse {found}: {e}")
+        # Normalize: payload is fixture content + provenance, type derived from fixture or evidence envelope
+        ev_type = data.get("type", "evidence") if isinstance(data, dict) else "evidence"
+        # Preserve fixture fields but ensure canonical envelope fields
+        if isinstance(data, dict):
+            payload.update(data)
+            # Ensure type field consistent
+            payload["type"] = ev_type
+            payload["source"] = "evidence.load"
+            payload["source_file"] = str(found)
+            payload["platform"] = platform
+        else:
+            payload.update({"type": ev_type, "data": data, "source_file": str(found), "platform": platform})
+        payload["note"] = f"loaded controlled fixture {found.name} per FORENSICS §61"
     elif op.startswith("memory."):
         payload.update({"type": "memory", "memory": {"hollowed": False, "note": "synthetic - no dump read", "platform": platform}, "note": "synthetic", "platform": platform})
         ev_type = "memory"
