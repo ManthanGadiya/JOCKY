@@ -11,3 +11,4 @@ weasyprint==62.3
 python-multipart==0.0.9
 websockets==12.0
 pyyaml==6.0.3
+psutil==6.1.0
