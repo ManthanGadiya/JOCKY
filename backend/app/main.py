@@ -309,6 +309,16 @@ def validate_path(path: str):
         if "passwd" in path or "shadow" in path or "windows/system32/config" in path.lower():
             raise ValueError(f"Path rejected: {path!r} — outside allowed evidence roots")
 
+def _extract_investigation_titles(source: str):
+    import re as _re
+    pat = _re.compile(r'investigation\s+(?:"([^"]+)"|\'([^\']+)\')\s*\{', re.IGNORECASE)
+    titles = []
+    for m in pat.finditer(source):
+        title = m.group(1) or m.group(2)
+        if title:
+            titles.append(title)
+    return titles
+
 def _platform_provider_payload(op: str, platform: str, host_id: str, agent_id: str, source: str = "") -> tuple[Dict[str, Any], str]:
     """Dispatch to Windows vs Linux provider per ARCHITECTURE.md §8 + DESIGN.md §22 — keep JOCKY language platform-agnostic (LANGUAGE_SPEC §27)."""
     try:
@@ -654,6 +664,21 @@ def run_source(req: RunRequest):
         caps = []
     src_hash = hashlib.sha256(req.source.encode()).hexdigest()[:12]
     ir_hash = hashlib.sha256(ir.encode()).hexdigest()[:12]
+    # Investigation title as case title per LANGUAGE_SPEC §11 + FORENSICS §7 (case = investigation)
+    inv_titles = _extract_investigation_titles(req.source)
+    if inv_titles:
+        # Ensure case exists and set its title to first investigation title (if case is new or title is generic)
+        try:
+            cs = _get_cases()
+            existing = next((c for c in cs if c.get("id")==req.case_id), None)
+            title = inv_titles[0]
+            if not existing:
+                _add_case(req.case_id, title=title)
+            elif existing.get("title","").startswith("case-"):
+                # update generic title to investigation title
+                _add_case(req.case_id, title=title)
+        except Exception:
+            pass
     ensure_case(req.case_id)
     created = []
     # Platform resolution per ARCHITECTURE.md §8 (same JOCKY, different adapter)
