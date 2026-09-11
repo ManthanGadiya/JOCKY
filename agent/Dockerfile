@@ -4,7 +4,8 @@ WORKDIR /app
 # Keep C++ stub for reference (ARCHITECTURE.md §7) but primary transport is now Python via nginx per FORENSICS_SPEC §56
 COPY agent/src/agent.cpp /tmp/agent.cpp
 RUN apt-get update && apt-get install -y g++ && g++ -O2 /tmp/agent.cpp -o /app/agent && rm -rf /var/lib/apt/lists/* || echo "agent stub"
-# Real agent: Python HTTP via nginx (SECURITY_MODEL §24, ARCHITECTURE §21)
+# Real agent: Python HTTP via nginx (SECURITY_MODEL §24, ARCHITECTURE §21) — handles all fixtures: hollowing/byovd/timeline list/polymorphic demo
+# Fixed 2026-09-11: timestamp Optional[Any] + list/demo handling (timeline.json, polymorphic_files.json)
 COPY agent/agent.py /app/agent.py
 RUN chmod +x /app/agent.py
 # agent.py handles collection + transmit via BACKEND_URL=http://nginx:80 per docker-compose
