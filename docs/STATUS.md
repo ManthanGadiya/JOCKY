@@ -66,10 +66,11 @@ Build a safe, reproducible, defensive forensic investigation platform around the
 | End-to-end workflow     | 🟢 Verified     | Full sweep → envelope → YARA → Timeline/Graph/Risk→Report persists (Point 1+2) + **auth** `POST /api/auth/login` → JWT → `GET /api/auth/me` per SECURITY §19-20 |
 | Dashboard               | 🟢 Verified     | **Case isolation + enrichment** `App.tsx` `caseId` dropdown + `hostFilter`/`typeFilter`/`platformFilter` + `runPlatform` + `filteredEvidence` + **Timeline search/risk filter** + **Risk history sparkline** + **Graph node select** — per FORENSICS §7 + ARCHITECTURE §11 + DESIGN §41 |
 | Authentication          | 🟢 Verified     | **JWT** `backend/app/auth.py` `POST /api/auth/login` `HS256` + `GET /api/auth/me` + `GET /api/auth/status` per SECURITY §19-20 + `ARCHITECTURE §10` — `AUTH_REQUIRED` env (default false for host, strict 401 when true), `X-API-Key` fallback — 8 tests |
-| Automated tests         | 🟢 Verified     | **124 tests** (compiler 9, backend 13, e2e 3, forensic 6, report 4, yara 6, agent 8, grammar 12, platform 10, detection 11, storage 8, isolation 5, report-harden 3, correlation 6, auth 8, timeline 6, sigma-tune 6) all passing |
+| Automated tests         | 🟢 Verified     | **133 tests** (compiler 9, backend 13, e2e 3, forensic 6, report 4, yara 6, agent 8, grammar 12, platform 10, detection 11, storage 8, isolation 5, report-harden 3, correlation 6, auth 8, timeline 6, sigma-tune 6, evidence-load 9) all passing |
 | Correlation engine      | 🟢 Verified     | **Enriched** `GET /api/cases/{id}/graph` → `correlations` (temporal 0.6, pid 0.8, process→file 0.85, process→net 0.9, supports 0.95) + `weight` on edges, `correlation_count`, platform on nodes — per ARCHITECTURE §14 + FORENSICS §43 (6 tests) |
 | Timeline / Graph / Risk | 🟢 Verified     | **Detail** `GET /api/cases/{id}/risk/history` + `/risk/breakdown` (per-evidence behavioral+sigma) + `GET /api/cases/{id}/graph/expand?node_id=` (neighbors + payload) — frontend `Timeline` search/minRisk, `RiskGauge` history sparkline + breakdown toggle + `Graph` expand → `selectedNode` chip (6 tests) |
 | Sigma tuning            | 🟢 Verified     | **Auto-tune** `backend/app/sigma_tuner.py` `get_rules`/`tune_rule`/`auto_tune` (level/confidence 0.5-0.95, history) + `GET /api/sigma/rules` + `POST /api/sigma/tune` + `POST /api/sigma/auto-tune` + `GET /api/sigma/status` per ARCHITECTURE §13 + FORENSICS §34 (6 tests) |
+| Evidence.load           | 🟢 Verified     | **Wired** `evidence.load("testdata/hollowing.json")` per LANGUAGE §28 + IR_SPEC §18.1 + FORENSICS §61 — validates path (traversal 400), loads JSON fixture from allowed roots (`testdata/` `/app/testdata` `/evidence/` `/tmp/`), preserves `type/memory`/`driver` fields, adds `source_file` + `platform`, isolated per case + appears in timeline/graph/risk (9 tests) |
 
 ---
 
@@ -360,6 +361,15 @@ Progressively add operations per LANGUAGE_SPEC.md §10, each with capability, sy
 
 #### Verified
 - `pytest` 104/104 (6 new)
+
+### 2026-08-28 — Evidence.load Wiring (Controlled Fixtures)
+
+#### Added
+- `backend/app/main.py` `make_envelope` `evidence.load` branch per `LANGUAGE_SPEC §28` + `IR_SPEC §18.1` + `FORENSICS §61`: `extract_file_arg` + `validate_path` + allowed roots `candidates` (`/app/testdata`, `testdata`, etc, bare filename fallback), `not found` 400 with checked paths, JSON parse, `type` derived from fixture, `payload` merges fixture fields + `source="evidence.load"` + `source_file` + `platform` + `note` per §61, `ev_type` from fixture `type`
+- `tests/test_evidence_load.py` (9) — hollowing (memory hollowed), byovd (driver RTCore64), platform agnostic (same fixture windows vs linux same hollowed but platform differs), traversal rejected 400, missing arg 400/422, not-found 400, timeline/graph/risk isolation, combine with `process.list` + `file.hash` (3 evidences + correlation), lexer `evidence.load` whitelist
+
+#### Verified
+- `pytest` 133/133 (9 new) — `evidence.load("testdata/hollowing.json")` → memory hollowed `source_file` preserved, platform param respected, combined sweep 3 evidences graph `correlation_count≥1`
 
 ### 2026-08-28 — Sigma Auto-Tune (Per-Evidence Tuning)
 
