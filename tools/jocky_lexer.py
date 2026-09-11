@@ -18,8 +18,8 @@ import re
 from dataclasses import dataclass
 from typing import List, Tuple, Optional
 
-# Keywords per grammar/jocky.g4 + Lexer.cpp kws set
-KEYWORDS = {"let", "if", "else", "for", "while", "func", "return", "import", "true", "false", "null"}
+# Keywords per grammar/jocky.g4 + Lexer.cpp kws set + LANGUAGE_SPEC §24 reserved + §11 investigation
+KEYWORDS = {"let", "if", "else", "for", "while", "func", "return", "import", "true", "false", "null", "investigation"}
 
 @dataclass
 class Token:
@@ -212,11 +212,24 @@ OP_CAPS = {
     "evidence.load": "evidence.read",
 }
 
+def _extract_investigations(src: str):
+    """Extract investigation titles per LANGUAGE_SPEC §11: investigation \"name\" { ... }"""
+    import re as _re
+    # allow investigation "title" { or investigation 'title' {
+    pat = _re.compile(r'investigation\s+(?:"([^"]+)"|\'([^\']+)\')\s*\{', re.IGNORECASE)
+    titles = []
+    for m in pat.finditer(src):
+        title = m.group(1) or m.group(2)
+        if title:
+            titles.append(title)
+    return titles
+
 def validate_and_collect(src: str):
     """
     Grammar-wired validation (replaces RE_CALL regex).
     Returns (ops, caps, errors) where errors include syntax + unknown cap.
     Errors are fail-closed per SECURITY_MODEL §14 + IR_SPEC §33.
+    Supports LANGUAGE_SPEC §7 variables (ID = expr), §11 investigation blocks, §12 filter (as non-cap lang construct).
     """
     tokens = lex(src)
     calls, syntax_errors = parse_member_calls(tokens)
@@ -224,6 +237,25 @@ def validate_and_collect(src: str):
     ops = []
     caps = []
     seen = set()
+    # Extract investigations for validation (they are language constructs, not forensic ops)
+    investigations = _extract_investigations(src)
+    # Validate investigation titles are non-empty
+    for title in investigations:
+        if not title.strip():
+            errors.append("Investigation title cannot be empty per LANGUAGE_SPEC §11")
+    # Filter calls are not forensic ops — they use evidence but not caps; ensure they have at least 1 arg
+    # Detect filter( and correlate( as language built-ins per §12, §15
+    import re as _re
+    for m in _re.finditer(r'\bfilter\s*\(', src):
+        # count args inside filter — simplistic: must have comma
+        snippet = src[m.start():m.start()+200]
+        if ',' not in snippet.split(')',1)[0]:
+            errors.append(f"filter() requires at least 2 args per LANGUAGE_SPEC §12 at col {m.start()}")
+    for m in _re.finditer(r'\bcorrelate\s*\(', src):
+        snippet = src[m.start():m.start()+200]
+        if ',' not in snippet.split(')',1)[0]:
+            errors.append(f"correlate() requires at least 2 args per LANGUAGE_SPEC §15 at col {m.start()}")
+
     for c in calls:
         key = f"{c.namespace}.{c.method}"
         if key not in OP_CAPS:
@@ -234,6 +266,8 @@ def validate_and_collect(src: str):
             cap = OP_CAPS[key]
             if cap not in caps:
                 caps.append(cap)
+    # Return extra investigations for caller (backend) via side channel: attach as attribute
+    # To avoid changing signature, store in global for backend to retrieve (simpler: parse again)
     return ops, caps, errors, tokens, calls
 
 def lex_dump(src: str) -> str:

@@ -12,6 +12,13 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/) and [Sem
 - `backend/app/main.py` `GET /api/cases/{id}/graph` → `correlations` (temporal 0.6, pid 0.8, process→file 0.85, process→net 0.9, supports 0.95) + `weight` + `correlation_count` + platform on nodes per `ARCHITECTURE §14` + `FORENSICS §43`
 - `tests/test_correlation.py` (6) — full sweep correlations, temporal window, pid, mitre/platform, weight, confidence
 
+## 2026-08-28 — Language Features P1 — Variables, Investigation, Filter, Correlate (143 tests)
+
+### Added
+- `tools/jocky_lexer.py` — `investigation` keyword + `_extract_investigations` + filter/correlate 2-arg validation (LANGUAGE §11,12,15)
+- `backend/app/main.py` — `_extract_investigation_titles` + `POST /api/run` case title from investigation per FORENSICS §7
+- `tests/test_language_features.py` (9) — variable, let, investigation, filter, correlate, combined, unknown fail-closed, evidence.load
+
 ## 2026-08-28 — Evidence.load Wiring — Controlled Fixtures (133 tests)
 
 ### Added
