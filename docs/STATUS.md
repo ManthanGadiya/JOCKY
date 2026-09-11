@@ -66,8 +66,9 @@ Build a safe, reproducible, defensive forensic investigation platform around the
 | End-to-end workflow     | 🟢 Verified     | Full sweep → envelope → YARA → Timeline/Graph/Risk→Report persists (Point 1+2) + **auth** `POST /api/auth/login` → JWT → `GET /api/auth/me` per SECURITY §19-20 |
 | Dashboard               | 🟢 Verified     | **Case isolation + enrichment** `App.tsx` `caseId` dropdown + `hostFilter`/`typeFilter`/`platformFilter` + `runPlatform` + `filteredEvidence` + **Timeline search/risk filter** + **Risk history sparkline** + **Graph node select** — per FORENSICS §7 + ARCHITECTURE §11 + DESIGN §41 |
 | Authentication          | 🟢 Verified     | **JWT** `backend/app/auth.py` `POST /api/auth/login` `HS256` + `GET /api/auth/me` + `GET /api/auth/status` per SECURITY §19-20 + `ARCHITECTURE §10` — `AUTH_REQUIRED` env (default false for host, strict 401 when true), `X-API-Key` fallback — 8 tests |
-| Automated tests         | 🟢 Verified     | **143 tests** (compiler 9, backend 13, e2e 3, forensic 6, report 4, yara 6, agent 8, grammar 12, platform 10, detection 11, storage 8, isolation 5, report-harden 3, correlation 6, auth 8, timeline 6, sigma-tune 6, evidence-load 9, frontend-report 1, language 9) all passing |
+| Automated tests         | 🟢 Verified     | **152 tests** (compiler 9, backend 13, e2e 3, forensic 6, report 4, yara 6, agent 8, grammar 12, platform 10, detection 11, storage 8, isolation 5, report-harden 3, correlation 6, auth 8, timeline 6, sigma-tune 6, evidence-load 9, frontend-report 1, language 9, hardening 9) all passing |
 | Language features       | 🟢 Verified     | **P1** `investigation "title" { }` (sets case title per FORENSICS §7), `filter`/`correlate` (2-arg validation per LANGUAGE §12,15), variable `x = op()` assignments — via `tools/jocky_lexer.py` + `backend _extract_investigation_titles` (9 tests) |
+| Hardening P2            | 🟢 Verified     | **Resource limits** `MAX_IR_SIZE 100KB`/`MAX_EVIDENCE_SIZE 5MB`/`MAX_SOURCE_SIZE 50KB` per `SECURITY §28` `413` + **Audit** `backend/app/audit.py` hash chain (`prev_hash`/`hash`) `GET /api/audit` per `SECURITY §34-36` `ARCHITECTURE §11` — 9 tests |
 | Correlation engine      | 🟢 Verified     | **Enriched** `GET /api/cases/{id}/graph` → `correlations` (temporal 0.6, pid 0.8, process→file 0.85, process→net 0.9, supports 0.95) + `weight` on edges, `correlation_count`, platform on nodes — per ARCHITECTURE §14 + FORENSICS §43 (6 tests) |
 | Timeline / Graph / Risk | 🟢 Verified     | **Detail** `GET /api/cases/{id}/risk/history` + `/risk/breakdown` (per-evidence behavioral+sigma) + `GET /api/cases/{id}/graph/expand?node_id=` (neighbors + payload) — frontend `Timeline` search/minRisk, `RiskGauge` history sparkline + breakdown toggle + `Graph` expand → `selectedNode` chip (6 tests) |
 | Sigma tuning            | 🟢 Verified     | **Auto-tune** `backend/app/sigma_tuner.py` `get_rules`/`tune_rule`/`auto_tune` (level/confidence 0.5-0.95, history) + `GET /api/sigma/rules` + `POST /api/sigma/tune` + `POST /api/sigma/auto-tune` + `GET /api/sigma/status` per ARCHITECTURE §13 + FORENSICS §34 (6 tests) |
@@ -363,6 +364,16 @@ Progressively add operations per LANGUAGE_SPEC.md §10, each with capability, sy
 
 #### Verified
 - `pytest` 104/104 (6 new)
+
+### 2026-08-28 — Hardening P2 (Resource Limits + Audit)
+
+#### Added
+- `backend/app/audit.py` (60 lines) per `SECURITY §34-36` + `ARCHITECTURE §11`: `_events` + `_last_hash` chain, `log_event(actor,action,target,result,metadata)` (hash via `sha256(sorted json + prev_hash)`), `get_events(limit,action,actor)`, `clear_for_tests()`, printed `[audit]` per `DESIGN §50`
+- `backend/app/main.py` — `MAX_IR_SIZE`/`MAX_EVIDENCE_SIZE`/`MAX_SOURCE_SIZE` env (100KB/5MB/50KB) per `SECURITY §28` `DESIGN §53`, `POST /api/compile` + `POST /api/run` + `POST /api/evidence` now `413` when exceeded, `log_event` on `compile/run/evidence.submit/capability_denied`, `GET /api/audit` (limit/action/actor)
+- `tests/test_hardening_p2.py` (9) — source too large 413, compile too large 413, evidence too large 413, audit capability_denied, evidence submit, run execute, hash chain (`prev_hash == prior hash`), audit endpoint + filter, compile rejected logged
+
+#### Verified
+- `pytest` 152/152 (9 new) — resource limits `413` per `SECURITY §28`, audit hash chain per `§36`
 
 ### 2026-08-28 — Language Features P1 (Variables, Investigation, Filter, Correlate)
 
