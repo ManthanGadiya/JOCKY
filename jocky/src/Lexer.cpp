@@ -1,40 +1,62 @@
+#include "jocky/Lexer.h"
 #include <cctype>
 #include <string>
 #include <vector>
 #include <unordered_set>
 
 namespace jocky {
-enum class TokKind { ID, DOT, LPAREN, RPAREN, LBRACE, RBRACE, SEMI, COMMA, STRING, NUMBER, OP, KW, END };
-struct Token { TokKind kind; std::string text; int line; };
 static std::unordered_set<std::string> kws = {"let","if","else","for","while","func","function","return","import","true","false","null","investigation"};
 
 std::vector<Token> lex(const std::string& src) {
-  std::vector<Token> out; int line=1; size_t i=0; auto add=[&](TokKind k,std::string t){ out.push_back({k,t,line});};
+  std::vector<Token> out; int line=1; int col=1; size_t i=0;
+  auto add=[&](TokKind k,std::string t,int l,int c){ out.push_back({k,t,l,c}); };
   while(i<src.size()){
     char c=src[i];
-    if(c=='\n'){ line++; i++; continue; }
-    if(isspace((unsigned char)c)){ i++; continue; }
+    if(c=='\n'){ line++; col=1; i++; continue; }
+    if(c==' '||c=='\t'||c=='\r'){ col++; i++; continue; }
     if(c=='/' && i+1<src.size() && src[i+1]=='/'){ while(i<src.size()&&src[i]!='\n') i++; continue; }
-    if(c=='/' && i+1<src.size() && src[i+1]=='*'){ i+=2; while(i+1<src.size() && !(src[i]=='*'&&src[i+1]=='/')){ if(src[i]=='\n')line++; i++;} i+=2; continue; }
-    if(c=='.' ) { add(TokKind::DOT,"."); i++; continue; }
-    if(c=='(') { add(TokKind::LPAREN,"("); i++; continue; }
-    if(c==')') { add(TokKind::RPAREN,")"); i++; continue; }
-    if(c=='{') { add(TokKind::LBRACE,"{"); i++; continue; }
-    if(c=='}') { add(TokKind::RBRACE,"}"); i++; continue; }
-    if(c==';') { add(TokKind::SEMI,";"); i++; continue; }
-    if(c==',') { add(TokKind::COMMA,","); i++; continue; }
-    if(c=='"'||c=='\''){ char q=c; size_t j=i+1; std::string s; s+=q; while(j<src.size()&&src[j]!=q){ if(src[j]=='\\'&&j+1<src.size()){ s+=src[j]; s+=src[j+1]; j+=2; } else s+=src[j++]; } if(j<src.size()) s+=q, j++; add(TokKind::STRING,s); i=j; continue; }
-    if(isalpha((unsigned char)c)||c=='_'){ size_t j=i; while(j<src.size()&&(isalnum((unsigned char)src[j])||src[j]=='_')) j++; std::string w=src.substr(i,j-i); add(kws.count(w)?TokKind::KW:TokKind::ID,w); i=j; continue; }
-    if(isdigit((unsigned char)c)){ size_t j=i; while(j<src.size()&&(isdigit((unsigned char)src[j])||src[j]=='.')) j++; add(TokKind::NUMBER,src.substr(i,j-i)); i=j; continue; }
-    // operators
-    std::string op; op+=c;
-    if(i+1<src.size()){
-      std::string two=op+src[i+1];
-      if(two=="=="||two=="!="||two=="<="||two==">="||two=="&&"||two=="||"||two=="=>"){ add(TokKind::OP,two); i+=2; continue; }
+    if(c=='/' && i+1<src.size() && src[i+1]=='*'){ i+=2; col+=2; while(i+1<src.size() && !(src[i]=='*'&&src[i+1]=='/')){ if(src[i]=='\n'){line++; col=1;} else col++; i++;} i+=2; col+=2; continue; }
+    if(c=='.'){ add(TokKind::DOT,".",line,col); i++; col++; continue; }
+    if(c=='('){ add(TokKind::LPAREN,"(",line,col); i++; col++; continue; }
+    if(c==')'){ add(TokKind::RPAREN,")",line,col); i++; col++; continue; }
+    if(c=='{'){ add(TokKind::LBRACE,"{",line,col); i++; col++; continue; }
+    if(c=='}'){ add(TokKind::RBRACE,"}",line,col); i++; col++; continue; }
+    if(c==';'){ add(TokKind::SEMI,";",line,col); i++; col++; continue; }
+    if(c==','){ add(TokKind::COMMA,",",line,col); i++; col++; continue; }
+    if(c=='['){ add(TokKind::LBRACE,"[",line,col); i++; col++; continue; } // treat as LBRACK
+    if(c==']'){ add(TokKind::RBRACE,"]",line,col); i++; col++; continue; }
+    if(c=='"'||c=='\''){
+      char q=c; size_t j=i+1; std::string s; s+=q; int start_col=col;
+      while(j<src.size()&&src[j]!=q){
+        if(src[j]=='\\'&&j+1<src.size()){ s+=src[j]; s+=src[j+1]; j+=2; continue; }
+        if(src[j]=='\n') break;
+        s+=src[j++];
+      }
+      if(j<src.size()&&src[j]==q){ s+=q; j++; }
+      add(TokKind::STRING,s,line,start_col);
+      int consumed=(int)(j-i);
+      col+=consumed; i=j; continue;
     }
-    add(TokKind::OP,op); i++; continue;
+    if(isalpha((unsigned char)c)||c=='_'){
+      size_t j=i; while(j<src.size()&&(isalnum((unsigned char)src[j])||src[j]=='_')) j++;
+      std::string w=src.substr(i,j-i);
+      add(kws.count(w)?TokKind::KW:TokKind::ID,w,line,col);
+      col+=(int)(j-i); i=j; continue;
+    }
+    if(isdigit((unsigned char)c)){
+      size_t j=i; while(j<src.size()&&isdigit((unsigned char)src[j])) j++;
+      if(j<src.size()&&src[j]=='.'&&j+1<src.size()&&isdigit((unsigned char)src[j+1])){
+        j++; while(j<src.size()&&isdigit((unsigned char)src[j])) j++;
+      }
+      add(TokKind::NUMBER,src.substr(i,j-i),line,col);
+      col+=(int)(j-i); i=j; continue;
+    }
+    std::string two; if(i+1<src.size()) two=std::string()+c+src[i+1];
+    if(two=="=="||two=="!="||two=="<="||two==">="||two=="&&"||two=="||"||two=="=>"){ add(TokKind::OP,two,line,col); i+=2; col+=2; continue; }
+    if(std::string("+-*/!<>=").find(c)!=std::string::npos){ add(TokKind::OP,std::string(1,c),line,col); i++; col++; continue; }
+    add(TokKind::OP,std::string(1,c),line,col); i++; col++; continue;
   }
-  add(TokKind::END,"<EOF>");
+  add(TokKind::END,"<EOF>",line,col);
   return out;
 }
 }

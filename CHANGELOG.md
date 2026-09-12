@@ -6,6 +6,19 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/) and [Sem
 
 ## [Unreleased]
 
+## 2026-09-12 — Gap 4: ARCHITECTURE §4 / DESIGN C++ Pipeline — token-based Lexer/Parser + expanded Runtime (157 tests, no new count)
+
+### Added
+- `jocky/include/jocky/Lexer.h`: new header TokKind/Token{line,col} lex(src) shared.
+- `jocky/src/Lexer.cpp`: refactored to include Lexer.h, line:col tracking per Python lex, 13 keywords, WS/COMMENT skip, STRING escapes, NUMBER, OP 2-char.
+- `jocky/include/jocky/Parser.h`: MemberCall/ParseResult + parseMemberCalls/Investigations/Imports/Functions.
+- `jocky/src/Parser.cpp`: 164-line real parser matching Python: OP_WHITELIST 16 ops, parseMemberCalls with unmatched '(' detection, parseInvestigations balanced, parseImports forensic allowlist, parseFunctions balanced.
+- `jocky/src/IRGen.cpp`: now token-based via lex+Parser (not regex), aggregates allErrs fail-closed at line:col per SECURITY_MODEL §14.
+- `runtime/include/runtime.h` + `runtime/src/runtime.cpp`: expanded to match Python providers per ARCHITECTURE §8: Process with path/user/ppid_anomaly/platform, NetworkConn/FileInfo/DriverInfo, networkConnections C2, fileList via filesystem, fileHash via std::hash, driverScan vulnerable RTCore64, evidenceLoad via testdata fallback; synthetic fallback per SECURITY §47.
+
+### Verified
+- `pytest -q` 157 passed; C++ lex/parsing token-consistent with Python; Docker jockyc validation now mirrors host fallback.
+
 ## 2026-09-12 — Gap 3: IR_SPEC §5–11 IRModule JSON/SSA — deterministic JSON sidecar + validator (157 tests, no new count)
 
 ### Added
