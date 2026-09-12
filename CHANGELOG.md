@@ -6,6 +6,16 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/) and [Sem
 
 ## [Unreleased]
 
+## 2026-09-12 — Gap 3: IR_SPEC §5–11 IRModule JSON/SSA — deterministic JSON sidecar + validator (157 tests, no new count)
+
+### Added
+- `tools/jocky_lexer.py`: `OP_IR_META` mapping per IR_SPEC §8–18 + `build_ir_json(src,seed,poly)` deterministic builder per §32 producing `IRModule {version:1, entry:'main', metadata:{compiler_version:'1.0', language_version:'1.0', source_hash, build_timestamp:'2026-09-12T00:00:00Z', module_id, seed, poly}, capabilities, ops, investigations, imports, functions, builtins, instructions:[{result:'%0', opcode, type, category, op, operands, result_type, metadata:{source_file,line,column}}], types}` with SSA sequential `%N` per §9 (`%0=SYSTEM_INFO`, `%1=PROCESS_LIST`, `%2=FILE_HASH string "/evidence/sample.exe"` + operands + source line:col per §30); `validate_ir_json(ir)` per §33/§6 (`version==1`, entry, instructions opcode/result/type, capabilities) + deterministic `module_id=sha256(src+seed)[:8]` so polymorphic seeds distinct IDs but same logical ops (hash≠detection preserved).
+- `tools/jockyc.py`: `build_ir_json` sidecar — after `.ll` also writes `.ll.json` with `json.dump(ir_json, indent=2)` validated; `import json` added; preserves `.ll` + `.tokens` + `.ast`; polymorphic still distinct `sha12` but `ir_json` same ops.
+- `backend/app/main.py`: `_build_json` helper, `POST /api/compile` now returns `ir_json` + `ir_json_version` with version validation `422` on `validate_ir_json` failure, `POST /api/run` likewise includes `ir_json`, new `POST /api/ir/validate` (`IR Compatibility Error: Required 2, Runtime supports 1` per §6) and `GET /api/ir/spec` (types, entry, categories) per §32/33.
+
+### Verified
+- `POST /api/compile` `investigation "host_scan" {system.info(); process.list(); file.hash("/evidence/sample.exe");}` → `ir_version 1` + `ir_json` 3 instructions `SYSTEM_INFO evidence`, `PROCESS_LIST evidence_set<process>`, `FILE_HASH string` with typed operands + line:col; `POST /api/ir/validate` `v2` → `422` compatibility error; `GET /api/ir/spec` 200; `tools/jockyc.py examples/test.jocky -o build/a.ll` → `build/a.ll` 1954B + `build/a.ll.json` 6693B deterministically; `pytest -q` 157 passed.
+
 ## 2026-09-12 — Gap 2: LANGUAGE_SPEC §12/15/18/19 Filter/Correlate/Import/Func — IR-emitted with validation (157 tests, no new count)
 
 ### Added

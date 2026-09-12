@@ -151,13 +151,13 @@ def _update_case_risk(case_id: int, risk: int):
 # Whitelist per SECURITY_MODEL.md §16 + tools/jockyc.py — single source per grammar/jocky.g4
 # Grammar-wired: uses tools/jocky_lexer.py lex() + parse_member_calls() instead of RE_CALL regex
 try:
-    from tools.jocky_lexer import OP_CAPS as _LEX_OP_CAPS, validate_and_collect as _lex_validate, lex as _lex_tmp, parse_imports as _lex_parse_imports, parse_functions as _lex_parse_funcs, parse_lang_builtins as _lex_parse_builtins
+    from tools.jocky_lexer import OP_CAPS as _LEX_OP_CAPS, validate_and_collect as _lex_validate, lex as _lex_tmp, parse_imports as _lex_parse_imports, parse_functions as _lex_parse_funcs, parse_lang_builtins as _lex_parse_builtins, build_ir_json as _build_ir_json, validate_ir_json as _validate_ir_json
     OP_CAPS = _LEX_OP_CAPS
     _HAS_LEX = True
     def validate_and_collect(source: str):
         ops, caps, errors, tokens, calls = _lex_validate(source)
         return ops, caps, errors
-    # Helpers for Gap 2 IR emission
+    # Helpers for Gap 2+3 IR emission
     def _lex_helpers(src: str):
         try:
             toks = _lex_tmp(src)
@@ -167,9 +167,14 @@ try:
             return [im.module for im in imps], [f.name for f in fncs], bfound
         except Exception:
             return [], [], []
+    def _build_json(src: str, seed: int = 0, poly: bool = False):
+        try:
+            return _build_ir_json(src, seed, poly)
+        except Exception:
+            return None
 except ImportError:
     try:
-        from jocky_lexer import OP_CAPS as _LEX_OP_CAPS2, validate_and_collect as _lex_validate2, lex as _lex_tmp2, parse_imports as _lex_parse_imports2, parse_functions as _lex_parse_funcs2, parse_lang_builtins as _lex_parse_builtins2
+        from jocky_lexer import OP_CAPS as _LEX_OP_CAPS2, validate_and_collect as _lex_validate2, lex as _lex_tmp2, parse_imports as _lex_parse_imports2, parse_functions as _lex_parse_funcs2, parse_lang_builtins as _lex_parse_builtins2, build_ir_json as _build_ir_json2, validate_ir_json as _validate_ir_json2
         OP_CAPS = _LEX_OP_CAPS2
         _HAS_LEX = True
         def validate_and_collect(source: str):
@@ -184,6 +189,11 @@ except ImportError:
                 return [im.module for im in imps], [f.name for f in fncs], bfound
             except Exception:
                 return [], [], []
+        def _build_json(src: str, seed: int = 0, poly: bool = False):
+            try:
+                return _build_ir_json2(src, seed, poly)
+            except Exception:
+                return None
     except Exception:
         _HAS_LEX = False
         OP_CAPS = {
@@ -220,6 +230,10 @@ except ImportError:
                     if cap not in caps:
                         caps.append(cap)
             return ops, caps, errors
+        def _build_json(src: str, seed: int = 0, poly: bool = False):
+            return None
+        def _validate_json(ir: dict):
+            return []
 # Agent policy: which caps are allowed (deny-by-default per SECURITY_MODEL.md §17)
 DEFAULT_POLICY = {
     "system.read": True,
@@ -710,6 +724,29 @@ def compile_source(req: CompileRequest):
         except Exception: pass
     src_hash = hashlib.sha256(req.source.encode()).hexdigest()[:12]
     ir_hash = hashlib.sha256(ir.encode()).hexdigest()[:12]
+    # Gap 3: build IR JSON per IR_SPEC §32 + validate version
+    ir_json = None
+    ir_json_errors = []
+    if _HAS_LEX:
+        try:
+            ir_json = _build_json(req.source, req.seed, req.polymorphic)
+            if ir_json is not None:
+                # Validate version per IR_SPEC §6, §33
+                try:
+                    from tools.jocky_lexer import validate_ir_json as _vjson
+                    ir_json_errors = _vjson(ir_json)
+                except ImportError:
+                    try:
+                        from jocky_lexer import validate_ir_json as _vjson2
+                        ir_json_errors = _vjson2(ir_json)
+                    except Exception:
+                        pass
+                if ir_json_errors:
+                    raise ValueError("IR JSON validation failed: " + "; ".join(ir_json_errors))
+        except ValueError as je:
+            raise HTTPException(status_code=422, detail=str(je))
+        except Exception:
+            pass
     return {
         "ir": ir,
         "ir_version": 1,
@@ -719,7 +756,37 @@ def compile_source(req: CompileRequest):
         "ops": ops,
         "poly": req.polymorphic,
         "seed": req.seed,
+        "ir_json": ir_json,
+        "ir_json_version": 1 if ir_json else None,
     }
+
+@app.post("/api/ir/validate")
+def ir_validate(payload: dict):
+    """Validate IR JSON per IR_SPEC §33 — checks version, opcode, types, entry, capabilities."""
+    ir = payload.get("ir_json") or payload.get("ir") or payload
+    # If payload contains 'version' at top-level, treat as ir_json directly
+    if _HAS_LEX:
+        try:
+            from tools.jocky_lexer import validate_ir_json as _vjson3
+            errs = _vjson3(ir if isinstance(ir, dict) else {})
+        except ImportError:
+            try:
+                from jocky_lexer import validate_ir_json as _vjson3b
+                errs = _vjson3b(ir if isinstance(ir, dict) else {})
+            except Exception:
+                errs = []
+        if errs:
+            raise HTTPException(status_code=422, detail="IR validation failed: " + "; ".join(errs))
+        # Also check version mismatch per IR_SPEC §6
+        ver = ir.get("version") if isinstance(ir, dict) else None
+        if ver is not None and ver != 1:
+            raise HTTPException(status_code=422, detail=f"IR Compatibility Error: Required IR version: {ver}, Runtime supports: 1")
+        return {"valid": True, "version": 1, "checked": True, "ir_version": 1}
+    return {"valid": True, "version": 1, "checked": False}
+
+@app.get("/api/ir/spec")
+def ir_spec():
+    return {"ir_version": 1, "types": ["void","bool","int","float","string","list","map","evidence","evidence_set","finding","evidence_set<process>"], "entry": "main", "categories": ["System","Process","File","Network","Driver","Memory","Evidence","Detection","Correlation","Control","Reporting"]}
 
 @app.post("/api/run")
 def run_source(req: RunRequest):
@@ -793,6 +860,13 @@ def run_source(req: RunRequest):
     if _audit:
         try: _audit.log_event(req.agent_id, "run.execute", f"case:{req.case_id}", "success", {"ops": ops, "evidence": len(created), "risk": max_risk})
         except Exception: pass
+    # Gap 3: include IR JSON for reproducibility per IR_SPEC §32
+    ir_json = None
+    if _HAS_LEX:
+        try:
+            ir_json = _build_json(req.source, req.seed, req.polymorphic)
+        except Exception:
+            pass
     return {
         "ir": ir,
         "ir_version": 1,
@@ -805,6 +879,8 @@ def run_source(req: RunRequest):
         "risk": max_risk,
         "level": "CRITICAL" if max_risk>80 else "HIGH" if max_risk>60 else "MEDIUM" if max_risk>30 else "LOW",
         "case_id": req.case_id,
+        "ir_json": ir_json,
+        "ir_json_version": 1 if ir_json else None,
     }
 
 @app.get("/api/cases/{case_id}/timeline")

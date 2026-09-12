@@ -3,7 +3,7 @@
 **Document:** `STATUS.md`
 **Project:** JOCKY
 **Status:** Active Development
-**Last Updated:** 2026-09-12 — Gap 2 (Filter/Correlate/Import/Func) closed (Gaps 1-2 done)
+**Last Updated:** 2026-09-12 — Gap 3 (IR JSON/SSA) closed (Gaps 1-3 done)
 
 ---
 
