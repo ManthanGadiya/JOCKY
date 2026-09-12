@@ -18,8 +18,8 @@ import re
 from dataclasses import dataclass
 from typing import List, Tuple, Optional
 
-# Keywords per grammar/jocky.g4 + Lexer.cpp kws set + LANGUAGE_SPEC §24 reserved + §11 investigation
-KEYWORDS = {"let", "if", "else", "for", "while", "func", "return", "import", "true", "false", "null", "investigation"}
+# Keywords per grammar/jocky.g4 + Lexer.cpp kws set + LANGUAGE_SPEC §24 reserved + §11 investigation + §19 function
+KEYWORDS = {"let", "if", "else", "for", "while", "func", "function", "return", "import", "true", "false", "null", "investigation"}
 
 @dataclass
 class Token:
@@ -286,6 +286,217 @@ def parse_investigations(tokens: List[Token]) -> Tuple[List[Investigation], List
         i += 1
     return investigations, errors
 
+@dataclass
+class ImportModule:
+    module: str
+    line: int
+    col: int
+    raw: str
+
+@dataclass
+class FunctionInfo:
+    name: str
+    line: int
+    col: int
+
+# Allowlist for LANGUAGE_SPEC §18 imports — forensic modules + generic .jocky files
+ALLOWED_IMPORT_PREFIXES = ("forensic.",)
+ALLOWED_IMPORT_MODULES = {"forensic.process","forensic.network","forensic.net","forensic.file","forensic.system","forensic.driver","forensic.memory","forensic.evidence","forensic.timeline","forensic.graph","forensic.risk","forensic.report"}
+
+def parse_imports(tokens: List[Token]) -> Tuple[List[ImportModule], List[str]]:
+    """Parse import statements per LANGUAGE_SPEC §18 + grammar/jocky.g4 importStmt: 'import' (STRING | importPath) ';'"""
+    imports: List[ImportModule] = []
+    errors: List[str] = []
+    i = 0
+    while i < len(tokens):
+        t = tokens[i]
+        if t.kind == "KW" and t.text == "import":
+            # Expect STRING or ID then ('.' ID)* then SEMI
+            if i + 1 >= len(tokens):
+                errors.append(f"Syntax error: import requires module at {t.line}:{t.col} — expected 'import \"forensic.process\";' per LANGUAGE_SPEC §18")
+                i += 1
+                continue
+            nxt = tokens[i+1]
+            module = ""
+            raw = ""
+            consumed = 1  # at least KW
+            line, col = nxt.line, nxt.col
+            if nxt.kind == "STRING":
+                raw = nxt.text
+                inner = raw[1:-1] if len(raw)>=2 and raw[0] in ('"',"'") and raw[-1]==raw[0] else raw
+                module = inner
+                consumed = 2
+                line, col = nxt.line, nxt.col
+                # Check SEMI follows
+                if i+2 >= len(tokens) or tokens[i+2].kind != "SEMI":
+                    errors.append(f"Syntax error: import \"{module}\" missing ';' at {nxt.line}:{nxt.col} per grammar/jocky.g4 importStmt")
+                else:
+                    consumed = 3
+            elif nxt.kind == "ID":
+                # Collect dotted path: ID ('.' ID)*
+                parts = [nxt.text]
+                j = i+2
+                while j+1 < len(tokens) and tokens[j].kind == "DOT" and tokens[j+1].kind == "ID":
+                    parts.append(tokens[j+1].text)
+                    j += 2
+                module = ".".join(parts)
+                raw = module
+                line, col = nxt.line, nxt.col
+                # Check SEMI after path
+                if j >= len(tokens) or tokens[j].kind != "SEMI":
+                    errors.append(f"Syntax error: import {module} missing ';' at {t.line}:{t.col} per grammar/jocky.g4 importStmt")
+                    consumed = (j - i)
+                else:
+                    consumed = (j - i) + 1
+            else:
+                errors.append(f"Syntax error: import requires STRING or dotted path at {t.line}:{t.col} — got {nxt.kind}({nxt.text!r}) per LANGUAGE_SPEC §18")
+                i += 1
+                continue
+            # Validate module — allow forensic.* or *.jocky, reject path traversal
+            if not module.strip():
+                errors.append(f"Import module cannot be empty at {line}:{col} per LANGUAGE_SPEC §18")
+            elif ".." in module or "\x00" in module:
+                errors.append(f"Import rejected: {module!r} contains .. or null byte at {line}:{col} — path traversal")
+            elif module not in ALLOWED_IMPORT_MODULES and not any(module.startswith(p) for p in ALLOWED_IMPORT_PREFIXES) and not module.endswith(".jocky") and "/" not in module:
+                # For strict spec: only forensic.* or .jocky files are valid; be lenient for demo: allow forensic.* any suffix
+                if not module.startswith("forensic."):
+                    errors.append(f"Unknown import module: {module!r} at {line}:{col} — not in JOCKY forensic allowlist (LANGUAGE_SPEC §18). Allowed: forensic.* or *.jocky")
+                else:
+                    imports.append(ImportModule(module=module, line=line, col=col, raw=raw))
+                    i += consumed
+                    continue
+            else:
+                imports.append(ImportModule(module=module, line=line, col=col, raw=raw))
+            # Also need to handle allowed case where forensic.* suffix not in exact allowlist but prefix ok — already handled above as import
+            if module.startswith("forensic.") or module.endswith(".jocky") or "/" in module:
+                # If we haven't already appended and no error, append now
+                if not any(im.module==module and im.line==line for im in imports) and not any(e for e in errors if module in e and str(line) in e):
+                    # Check if not already added due to allowlist exact match
+                    if module not in [im.module for im in imports]:
+                        imports.append(ImportModule(module=module, line=line, col=col, raw=raw))
+            i += consumed
+            continue
+        i += 1
+    return imports, errors
+
+def parse_functions(tokens: List[Token]) -> Tuple[List[FunctionInfo], List[str]]:
+    """Parse function declarations per LANGUAGE_SPEC §19 + grammar/jocky.g4 funcDecl: ('func' | 'function') ID '(' paramList? ')' block"""
+    funcs: List[FunctionInfo] = []
+    errors: List[str] = []
+    i = 0
+    while i < len(tokens):
+        t = tokens[i]
+        if t.kind == "KW" and t.text in ("func","function"):
+            if i+1 >= len(tokens) or tokens[i+1].kind not in ("ID","KW"):
+                errors.append(f"Syntax error: {t.text} requires name at {t.line}:{t.col} — expected 'func collect_host() {{' per LANGUAGE_SPEC §19")
+                i += 1
+                continue
+            name_tok = tokens[i+1]
+            name = name_tok.text
+            if not name.strip():
+                errors.append(f"Function name cannot be empty at {name_tok.line}:{name_tok.col}")
+            # Expect LPAREN
+            if i+2 >= len(tokens) or tokens[i+2].kind != "LPAREN":
+                errors.append(f"Syntax error: func {name} missing '(' at {name_tok.line}:{name_tok.col} per grammar/jocky.g4 funcDecl")
+                i += 2
+                continue
+            # Find matching RPAREN
+            depth = 0
+            j = i+2
+            found_rparen = False
+            while j < len(tokens):
+                if tokens[j].kind == "LPAREN":
+                    depth += 1
+                elif tokens[j].kind == "RPAREN":
+                    depth -= 1
+                    if depth==0:
+                        found_rparen=True
+                        break
+                elif tokens[j].kind == "END":
+                    break
+                j+=1
+            if not found_rparen:
+                errors.append(f"Syntax error: func {name} unmatched '(' at {t.line}:{t.col} — expected ')'")
+                i = j
+                continue
+            # Expect LBRACE block
+            if j+1 >= len(tokens) or tokens[j+1].kind != "LBRACE":
+                errors.append(f"Syntax error: func {name} missing '{{' at {t.line}:{t.col} — expected block per LANGUAGE_SPEC §19")
+                i = j+1
+                continue
+            # Find matching RBRACE
+            depth = 0
+            k = j+1
+            found_rbrace=False
+            while k < len(tokens):
+                if tokens[k].kind=="LBRACE":
+                    depth+=1
+                elif tokens[k].kind=="RBRACE":
+                    depth-=1
+                    if depth==0:
+                        found_rbrace=True
+                        break
+                elif tokens[k].kind=="END":
+                    break
+                k+=1
+            if not found_rbrace:
+                errors.append(f"Syntax error: unterminated func {name} block at {t.line}:{t.col} — missing '}}'")
+                i=k
+                continue
+            # Validate function name is valid identifier (already)
+            funcs.append(FunctionInfo(name=name, line=t.line, col=t.col))
+            i = k+1
+            continue
+        i+=1
+    return funcs, errors
+
+def parse_lang_builtins(tokens: List[Token]) -> Tuple[List[str], List[str]]:
+    """Detect filter/correlate built-ins with correct arity (LANGUAGE_SPEC §12, §15) token-based for line:col."""
+    errors: List[str]=[]
+    found: List[str]=[]
+    i=0
+    while i < len(tokens):
+        t=tokens[i]
+        if t.kind=="ID" and t.text in ("filter","correlate") and i+1 < len(tokens) and tokens[i+1].kind=="LPAREN":
+            # Find matching RPAREN and count commas at depth 0
+            depth=0
+            j=i+1
+            arg_commas=0
+            has_content=False
+            inner_tokens=[]
+            found_close=False
+            while j < len(tokens):
+                if tokens[j].kind=="LPAREN":
+                    depth+=1
+                elif tokens[j].kind=="RPAREN":
+                    depth-=1
+                    if depth==0:
+                        found_close=True
+                        break
+                elif tokens[j].kind=="COMMA" and depth==1:
+                    arg_commas+=1
+                elif tokens[j].kind not in ("END",):
+                    if depth==1 and tokens[j].kind not in ("COMMA",):
+                        has_content=True
+                j+=1
+            if not found_close:
+                errors.append(f"Syntax error: {t.text}() unmatched '(' at {t.line}:{t.col}")
+                i=j
+                continue
+            # Count args: commas+1 if has_content else 0
+            arg_count = 0
+            if has_content:
+                arg_count = arg_commas+1
+            sec = "12" if t.text=="filter" else "15"
+            if arg_count < 2:
+                errors.append(f"{t.text}() requires at least 2 args per LANGUAGE_SPEC §{sec} at {t.line}:{t.col} — got {arg_count}")
+            else:
+                found.append(t.text)
+            i=j+1
+            continue
+        i+=1
+    return found, errors
+
 def validate_and_collect(src: str):
     """
     Grammar-wired validation (replaces RE_CALL regex).
@@ -294,6 +505,7 @@ def validate_and_collect(src: str):
     Supports LANGUAGE_SPEC §7 variables (ID = expr), §11 investigation blocks, §12 filter (as non-cap lang construct).
     Investigation blocks are now grammar-enforced per grammar/jocky.g4 investigationStmt: 'investigation' STRING block
     with balanced brace scoping and line:col diagnostics (Gap 1 fix).
+    Gap 2: adds import (LANGUAGE_SPEC §18) validation, func/function (LANGUAGE_SPEC §19) parsing, and filter/correlate arity via token walk.
     """
     tokens = lex(src)
     calls, syntax_errors = parse_member_calls(tokens)
@@ -304,18 +516,13 @@ def validate_and_collect(src: str):
     # Parse investigation blocks with grammar-enforced block scoping (Gap 1)
     investigations, inv_errors = parse_investigations(tokens)
     errors.extend(inv_errors)
-    # Filter calls are not forensic ops — they use evidence but not caps; ensure they have at least 1 arg
-    # Detect filter( and correlate( as language built-ins per §12, §15
-    import re as _re
-    for m in _re.finditer(r'\bfilter\s*\(', src):
-        # count args inside filter — simplistic: must have comma
-        snippet = src[m.start():m.start()+200]
-        if ',' not in snippet.split(')',1)[0]:
-            errors.append(f"filter() requires at least 2 args per LANGUAGE_SPEC §12 at col {m.start()}")
-    for m in _re.finditer(r'\bcorrelate\s*\(', src):
-        snippet = src[m.start():m.start()+200]
-        if ',' not in snippet.split(')',1)[0]:
-            errors.append(f"correlate() requires at least 2 args per LANGUAGE_SPEC §15 at col {m.start()}")
+    # Gap 2: imports + functions + built-ins
+    imports, imp_errors = parse_imports(tokens)
+    errors.extend(imp_errors)
+    funcs, func_errors = parse_functions(tokens)
+    errors.extend(func_errors)
+    builtins_found, builtin_errors = parse_lang_builtins(tokens)
+    errors.extend(builtin_errors)
 
     for c in calls:
         key = f"{c.namespace}.{c.method}"

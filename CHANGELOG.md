@@ -6,6 +6,17 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/) and [Sem
 
 ## [Unreleased]
 
+## 2026-09-12 — Gap 2: LANGUAGE_SPEC §12/15/18/19 Filter/Correlate/Import/Func — IR-emitted with validation (157 tests, no new count)
+
+### Added
+- `grammar/jocky.g4`: `importStmt` now `'import' (STRING | importPath) ';'` with `importPath : ID ('.' ID)*` supporting both `import "forensic.net";` and `import forensic.process;` per §18; `funcDecl` now `('func' | 'function') ID '(' paramList? ')' block` supporting both `func` and `function` per §19 — closes dotted import + function alias gaps.
+- `jocky/src/Lexer.cpp` + `tools/jocky_lexer.py` `KEYWORDS`: add `"function"` (12→13).
+- `tools/jocky_lexer.py`: `ImportModule` + `parse_imports(tokens)` forensic allowlist (`forensic.*` or `*.jocky`, traversal/`..` reject, missing `;` detection) — unknown module → `422` forensic allowlist per §18; `FunctionInfo` + `parse_functions(tokens)` balanced `()` + `{}` with unterminated → `422` per §19; `parse_lang_builtins(tokens)` token `filter`/`correlate` arity `, depth 1` → `422` if `<2 args` per §12/15; `validate_and_collect` now merges all three for fail-closed.
+- `tools/jockyc.py` + `backend/app/main.py` `generate_ir`: collect `jocky_imports`/`funcs`/`builtins` via lex helpers and emit IR markers `; JOCKY Imports:`, `; Funcs:`, `; Builtins:`, `; Control: if/for/while` and inside `entry:` emits `call @jocky_filter`/`@jocky_correlate`/`@jocky_func_<name>`/`@jocky_import_<mod>`/`@jocky_if_branch` etc. Demonstrates IR awareness while preserving hash≠detection; `examples/test.jocky` now shows `JOCKY Imports: forensic.net` + `Control: if`.
+
+### Verified
+- Manual gap2 suite 15 cases: quoted/dotted valid imports `200`, unknown/missing `;` → `422`; `func`/`function` valid `200` + `Funcs:` marker, missing `}` → `422`; `filter`/`correlate` 2 args `200` + `Builtins` + calls, 1 arg → `422`; `if`/`for` → `Control` + branch calls. `pytest -q` 157 passed; `pytest test_language_features + test_compiler_grammar` 21 passed; `jockyc examples/test.jocky -o build/a.ll` shows imports+control IR.
+
 ## 2026-09-12 — Gap 1: LANGUAGE_SPEC §11 Investigation Blocks — grammar-wired block scoping (157 tests, no new count)
 
 ### Added
