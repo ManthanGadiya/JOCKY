@@ -6,7 +6,7 @@
 namespace jocky {
 enum class TokKind { ID, DOT, LPAREN, RPAREN, LBRACE, RBRACE, SEMI, COMMA, STRING, NUMBER, OP, KW, END };
 struct Token { TokKind kind; std::string text; int line; };
-static std::unordered_set<std::string> kws = {"let","if","else","for","while","func","return","import","true","false","null"};
+static std::unordered_set<std::string> kws = {"let","if","else","for","while","func","return","import","true","false","null","investigation"};
 
 std::vector<Token> lex(const std::string& src) {
   std::vector<Token> out; int line=1; size_t i=0; auto add=[&](TokKind k,std::string t){ out.push_back({k,t,line});};

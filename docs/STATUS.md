@@ -3,7 +3,7 @@
 **Document:** `STATUS.md`
 **Project:** JOCKY
 **Status:** Active Development
-**Last Updated:** 2026-09-11
+**Last Updated:** 2026-09-12 — Gap 1 (Investigation Blocks) closed
 
 ---
 
