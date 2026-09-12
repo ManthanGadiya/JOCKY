@@ -31,3 +31,23 @@ Tests: existing 21 language/grammar passed, full 157 passed no regression.
 Docs: Now aligns LANGUAGE_SPEC S11 + g4 investigationStmt + FORENSICS S7. Additive, not breaking.
 
 Next: Gap 2 remains open.
+
+---
+
+## Fix 2026-09-12 - Gap 2: LANGUAGE_SPEC S12/S15/S18/S19 Filter/Correlate/Import/Func - CLOSED
+
+Gap: filter/correlate lexed not IR-emitted; import tokenized not validated; func/let/if/for/while/lambda exist in g4 but IR only MemberCall; Conditions/Loops not lowered (high).
+
+Implemented branch feature/gap2-filter-correlate-import-func:
+- grammar/jocky.g4: importStmt now 'import' (STRING | importPath) ';' with importPath : ID ('.' ID)* to support both quoted 'forensic.net' and dotted forensic.process per LANGUAGE_SPEC S18; funcDecl now ('func' | 'function') ID '(' paramList? ')' block to support both 'func' and 'function' per S19.
+- jocky/src/Lexer.cpp + tools/jocky_lexer.py: KEYWORDS add 'function' (now 13 keywords).
+- tools/jocky_lexer.py: Added ImportModule dataclass + parse_imports(tokens) with forensic allowlist (forensic.* or *.jocky), path traversal reject, missing semicolon detection; FunctionInfo dataclass + parse_functions(tokens) with balanced brace handling for func/function; parse_lang_builtins(tokens) token-based arity check for filter/correlate with comma counting at depth 1 and line:col errors; validate_and_collect now merges imp_errors+func_errors+builtin_errors for fail-closed 422.
+- tools/jockyc.py + backend/app/main.py: generate_ir now collects jocky_imports/funcs/builtins via lex helpers and emits IR markers: '; JOCKY Imports: ...', '; Funcs: ...', '; Builtins: filter, correlate', '; Control: if/for/while' plus inside entry: call @jocky_filter/@jocky_correlate/@jocky_func_<name>/@jocky_import_<mod>/@jocky_if_branch etc. Demonstrates IR awareness while preserving deterministic hash != detection.
+
+Behavior: valid import quoted/dotted -> 200 with JOCKY Imports marker; unknown import -> 422 forensic allowlist; missing semicolon -> 422; func/function -> 200 with Funcs marker; missing brace -> 422; filter/correlate 2 args ok -> Builtins + jocky_filter/correlate calls, 1 arg -> 422; if/for/while -> Control marker + branch/loop calls.
+
+Tests: existing 21 lang + 12 grammar still pass; full pytest 157 passed no regression; manual gap2 suite 15 cases all PASS; jockyc examples/test.jocky now shows JOCKY Imports: forensic.net and Control: if plus import/if_branch calls.
+
+Docs: Now aligns LANGUAGE_SPEC S12 filter, S15 correlate, S18 import validation, S19 functions, S13/14 control-flow markers. Added GAPS.md append-only note.
+
+Next: Gap 3 IR_SPEC JSON/SSA remains open.

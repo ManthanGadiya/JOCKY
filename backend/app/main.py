@@ -151,20 +151,39 @@ def _update_case_risk(case_id: int, risk: int):
 # Whitelist per SECURITY_MODEL.md §16 + tools/jockyc.py — single source per grammar/jocky.g4
 # Grammar-wired: uses tools/jocky_lexer.py lex() + parse_member_calls() instead of RE_CALL regex
 try:
-    from tools.jocky_lexer import OP_CAPS as _LEX_OP_CAPS, validate_and_collect as _lex_validate
+    from tools.jocky_lexer import OP_CAPS as _LEX_OP_CAPS, validate_and_collect as _lex_validate, lex as _lex_tmp, parse_imports as _lex_parse_imports, parse_functions as _lex_parse_funcs, parse_lang_builtins as _lex_parse_builtins
     OP_CAPS = _LEX_OP_CAPS
     _HAS_LEX = True
     def validate_and_collect(source: str):
         ops, caps, errors, tokens, calls = _lex_validate(source)
         return ops, caps, errors
+    # Helpers for Gap 2 IR emission
+    def _lex_helpers(src: str):
+        try:
+            toks = _lex_tmp(src)
+            imps,_ = _lex_parse_imports(toks)
+            fncs,_ = _lex_parse_funcs(toks)
+            bfound,_ = _lex_parse_builtins(toks)
+            return [im.module for im in imps], [f.name for f in fncs], bfound
+        except Exception:
+            return [], [], []
 except ImportError:
     try:
-        from jocky_lexer import OP_CAPS as _LEX_OP_CAPS2, validate_and_collect as _lex_validate2
+        from jocky_lexer import OP_CAPS as _LEX_OP_CAPS2, validate_and_collect as _lex_validate2, lex as _lex_tmp2, parse_imports as _lex_parse_imports2, parse_functions as _lex_parse_funcs2, parse_lang_builtins as _lex_parse_builtins2
         OP_CAPS = _LEX_OP_CAPS2
         _HAS_LEX = True
         def validate_and_collect(source: str):
             ops, caps, errors, tokens, calls = _lex_validate2(source)
             return ops, caps, errors
+        def _lex_helpers(src: str):
+            try:
+                toks = _lex_tmp2(src)
+                imps,_ = _lex_parse_imports2(toks)
+                fncs,_ = _lex_parse_funcs2(toks)
+                bfound,_ = _lex_parse_builtins2(toks)
+                return [im.module for im in imps], [f.name for f in fncs], bfound
+            except Exception:
+                return [], [], []
     except Exception:
         _HAS_LEX = False
         OP_CAPS = {
@@ -226,6 +245,16 @@ def generate_ir(source: str, seed: int, poly: bool):
     imports = ["kernel32.dll","ntdll.dll","advapi32.dll","user32.dll"]
     if poly:
         rng.shuffle(imports)
+    # Gap 2: collect language constructs for IR metadata
+    jocky_imports=[]; funcs=[]; builtins_found=[]
+    has_if = "if" in source and "if (" in source
+    has_for = "for (" in source
+    has_while = "while (" in source
+    if _HAS_LEX:
+        try:
+            jocky_imports, funcs, builtins_found = _lex_helpers(source)
+        except Exception:
+            pass
     lines = []
     lines.append(f"; JOCKY IR - seed={seed} poly={int(poly)}")
     lines.append(f"; IR_VERSION=1")
@@ -233,6 +262,22 @@ def generate_ir(source: str, seed: int, poly: bool):
     ops_str = ", ".join(ops) if ops else "(none)"
     lines.append(f"; IR_CAPS: {cap_str}")
     lines.append(f"; IR_OPS: {ops_str}")
+    if jocky_imports:
+        lines.append(f"; JOCKY Imports: {', '.join(jocky_imports)}")
+    if funcs:
+        lines.append(f"; Funcs: {', '.join(funcs)}")
+    if builtins_found:
+        uniq=[]
+        for b in builtins_found:
+            if b not in uniq:
+                uniq.append(b)
+        lines.append(f"; Builtins: {', '.join(uniq)}")
+    ctrls=[]
+    if has_if: ctrls.append("if")
+    if has_for: ctrls.append("for")
+    if has_while: ctrls.append("while")
+    if ctrls:
+        lines.append(f"; Control: {', '.join(ctrls)}")
     lines.append(f"; Source hash: {sha12(source)}")
     lines.append(f"; EntryPoint: 0x{entry:x}")
     lines.append(f"; Imports: {' '.join(imports)}")
@@ -264,6 +309,18 @@ def generate_ir(source: str, seed: int, poly: bool):
     if has("driver.list"): emit("driver_list", "driver.list")
     if has("driver.scan"): emit("driver_scan", "driver.scan")
     if has("driver.risk"): emit("driver_risk", "driver.risk")
+    # Gap 2: emit lang built-ins / imports / funcs / control-flow as IR (deterministic, not host code)
+    for b in builtins_found:
+        if b=="filter": emit("filter", "filter")
+        if b=="correlate": emit("correlate", "correlate")
+    for f in funcs:
+        emit(f"func_{f}", f"func {f}")
+    for imp in jocky_imports:
+        sane = imp.replace(".", "_").replace("/", "_").replace("-", "_")
+        emit(f"import_{sane}", f"import {imp}")
+    if has_if: emit("if_branch", "if")
+    if has_for: emit("for_loop", "for")
+    if has_while: emit("while_loop", "while")
     if cid == 0:
         emit("nop", "nop")
     if poly:

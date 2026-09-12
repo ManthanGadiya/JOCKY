@@ -18,7 +18,8 @@ statement
   ;
 
 investigationStmt : 'investigation' STRING block ;
-importStmt : 'import' STRING ';' ;
+importStmt : 'import' (STRING | importPath) ';' ;
+importPath : ID ('.' ID)* ;
 varDecl    : 'let' ID ('=' expr)? ';' ;
 assignment : ID '=' expr ';' ;
 exprStmt   : expr ';' ;
@@ -27,7 +28,7 @@ returnStmt : 'return' expr? ';' ;
 ifStmt   : 'if' '(' expr ')' block ('else' block)? ;
 forStmt  : 'for' '(' (varDecl|exprStmt|';') expr? ';' expr? ')' block ;
 whileStmt: 'while' '(' expr ')' block ;
-funcDecl : 'func' ID '(' paramList? ')' block ;
+funcDecl : ('func' | 'function') ID '(' paramList? ')' block ;
 paramList: ID (',' ID)* ;
 block    : '{' statement* '}' ;
 
