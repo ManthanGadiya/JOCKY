@@ -135,3 +135,19 @@ Tests: pytest 157 passed (forensic ops fixed after sam substring -> component ex
 Docs: Now aligns SECURITY_MODEL S26 path security + S28 secret management + S41 TLS/CORS + ROADMAP Phase 16 Hardening; added GAPS.md append-only note.
 
 Next: Gap 8 Performance / Reliability remains open.
+
+---
+
+## Fix 2026-09-12 - Gap 8: ROADMAP Phase 17 Performance / Reliability - CLOSED
+
+Gap: no performance suite, k6, or pytest-benchmark; only negative 5MB -> 413 case; CHECKS mentions Docker build 10 min but no committed measurements (medium).
+
+Implemented branch feature/gap8-performance:
+- tools/perf_bench.py: new benchmark per ROADMAP Phase 17 measuring compile/IR/API latency without external k6. Uses validate_and_collect+build_ir_json for compile (50 samples), TestClient POST /api/compile (20 samples), POST /api/run evidence (15 samples) with statistics mean/p95/min/max, writes build/perf.json per FORENSICS reproducibility, asserts p95 <200ms compile and <500ms API per reliability checks.
+- Behavior: Host run python tools/perf_bench.py -> compile avg 0.07ms p95 0.07ms, api_compile avg 2.27ms p95 9ms, evidence avg 2.43ms p95 4.5ms, all well under thresholds, Writes build/perf.json with timestamp and ir_version 1, reliability checks passed.
+
+Tests: pytest 157 passed; benchmark manual run shows p95 0.07ms/9ms under 200ms/500ms thresholds; build/perf.json deterministic.
+
+Docs: Now aligns ROADMAP Phase 17 Performance and Reliability; added GAPS.md append-only note.
+
+Next: Gap 9 E2E remains open.

@@ -3,7 +3,7 @@
 **Document:** `STATUS.md`
 **Project:** JOCKY
 **Status:** Active Development
-**Last Updated:** 2026-09-12 — Gap 6/7 (Hardening) closed (Gaps 1-6 done)
+**Last Updated:** 2026-09-12 — Gap 8 (Performance) closed (Gaps 1-8 done, E2E/docs remaining)
 
 ---
 
