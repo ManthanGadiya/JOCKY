@@ -12,6 +12,10 @@ JWT_SECRET = os.getenv("JWT_SECRET", "change-me-in-prod")
 JWT_ALG = os.getenv("JWT_ALG", "HS256")
 JWT_EXPIRE = int(os.getenv("JWT_EXPIRE_SECONDS", "3600"))
 AUTH_REQUIRED = os.getenv("AUTH_REQUIRED", "false").lower() == "true"
+# Hardening per SECURITY_MODEL §41 + ROADMAP Phase 16: default secret must not be used in strict mode
+if AUTH_REQUIRED and JWT_SECRET in ("change-me-in-prod", "change-me-in-prod-jocky-2026", "change-me"):
+    # Fail-closed per SECURITY §14 — refuse to run with default secret in prod
+    raise RuntimeError("AUTH_REQUIRED=true but JWT_SECRET is default 'change-me-in-prod' — set env JWT_SECRET to a strong random value per SECURITY_MODEL §28 Secret management (see .env.example)")
 
 # Simple in-memory user store for demo (single analyst per SECURITY_MODEL §7 Investigator)
 # In production would be DB-backed; here is synthetic per lab isolation

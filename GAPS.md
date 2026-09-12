@@ -112,3 +112,26 @@ Tests: pytest 157 passed; manual provenance test shows compiler_version etc pres
 Docs: Now aligns FORENSICS S6 provenance bundle + S43 integrity + IR_SPEC S31 provenance; added GAPS.md append-only note.
 
 Next: Gap 6 SECURITY_MODEL remains open.
+
+---
+
+## Fix 2026-09-12 - Gap 6/7: SECURITY_MODEL T1-T10 / ROADMAP Phase 16 Hardening - CLOSED
+
+Gap: validate_path checks only .., NUL, and /etc/passwd substring; only MAX_* limits; no TLS (nginx plain 80); .env contains secrets; CORS allows * (medium).
+
+Implemented branch feature/gap6-security-hardening:
+- backend/app/main.py validate_path: hardened per SECURITY_MODEL S26 + Phase 16 — now checks .., %00, null, sensitive components via path component exact match (passwd/shadow/gshadow/sam/security/ntds.dit) and sensitive paths (/etc/passwd, /etc/shadow, /proc/self/environ, windows/system32/config, ntds.dit) with separator-aware normalization, not substring 'sam' in 'sample'; allowlist for lab roots (/evidence/,/tmp/,/var/log/,/app/testdata,testdata,evidence/,sample.exe,memory.dump,C:\Evidence\,C:\Temp\ etc) and absolute / and C:\ enforcement outside allowed roots -> 400; preserves /evidence/sample.exe and /tmp/malware.exe while blocking /etc/passwd, SAM, SECURITY.
+- backend/app/main.py CORS: env CORS_ORIGINS (comma-separated) with default * for host tests, prod should set restricted per SECURITY S41 (was hardcoded *).
+- backend/app/auth.py: fail-closed per SECURITY S14 — if AUTH_REQUIRED=true and JWT_SECRET is default change-me-* -> RuntimeError at import, refuses to run with default secret (secret management per S28).
+- .gitignore: added .env (was .env.local only) + !.env.example to stop tracking secrets.
+- .env.example: new file with strong placeholder secrets (CHANGE_ME_TO_STRONG_RANDOM_32_CHARS_MIN etc) and CORS_ORIGINS guidance, DATABASE_URL template per SECURITY S28.
+- nginx/nginx.conf: hardened per S41 + Phase 16 — added X-Content-Type-Options nosniff, X-Frame-Options DENY, Referrer-Policy, commented TLS 443 server block with ssl_certificate / ssl_protocols TLSv1.2 TLSv1.3 and redirect placeholder for prod.
+- .env removed from index via git rm --cached (file kept locally, now ignored) — hardening per S28.
+
+Behavior: file.hash /evidence/sample.exe still 200, /tmp/malware.exe 200, ../../etc/passwd 400 traversal, /etc/passwd 400 sensitive, C:\Windows\System32\config\SAM 400, sample.exe bare allowed; CORS still * for host but env configurable; AUTH_REQUIRED=true with default secret now fails fast; nginx adds hardening headers + TLS doc.
+
+Tests: pytest 157 passed (forensic ops fixed after sam substring -> component exact); manual validate_path tests for allowed vs sensitive; nginx config valid.
+
+Docs: Now aligns SECURITY_MODEL S26 path security + S28 secret management + S41 TLS/CORS + ROADMAP Phase 16 Hardening; added GAPS.md append-only note.
+
+Next: Gap 8 Performance / Reliability remains open.
