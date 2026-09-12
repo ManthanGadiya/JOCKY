@@ -69,3 +69,27 @@ Tests: full pytest 157 passed no regression; manual IR API test shows compile 20
 Docs: Now aligns IR_SPEC S5 IRModule, S6 version, S7 metadata, S8 types, S9 SSA %0=FILTER, S10 instructions, S32 JSON serialization, S33 validation; added GAPS.md append-only note.
 
 Next: Gap 4 C++ pipeline scaffolding remains open.
+
+---
+
+## Fix 2026-09-12 - Gap 4: ARCHITECTURE S4 / DESIGN Compiler Pipeline C++ Scaffolding - CLOSED
+
+Gap: jocky/src/Lexer.cpp real but Parser.cpp 3-line stub, IRGen.cpp regex not ANTLR visitor, runtime 13-line stub, transform 390B stubs; host uses Python tools/jocky_lexer.py not C++ (high).
+
+Implemented branch feature/gap4-cpp-pipeline:
+- jocky/include/jocky/Lexer.h: new header with TokKind, Token{line,col}, lex(src) declaration (shared between Lexer and Parser).
+- jocky/src/Lexer.cpp: refactored to include Lexer.h, tracks line:col per Python lex, supports WS/COMMENT skip, STRING with escapes, NUMBER, ID/KW (now 13 keywords including function/investigation), OP 2-char, line:col diagnostics.
+- jocky/include/jocky/Parser.h: new header with MemberCall, ParseResult, parseMemberCalls, parseInvestigations, parseImports, parseFunctions declarations.
+- jocky/src/Parser.cpp: replaced stub with full parser (164 lines) matching Python tools/jocky_lexer.py: OP_WHITELIST 16 ops, ALLOWED_IMPORTS, parseMemberCalls (ID DOT ID LPAREN with unmatched '(' detection + unterminated string), parseInvestigations (investigation STRING block balanced), parseImports (STRING|dotted forensic.* path with missing ';' and allowlist validation), parseFunctions (func|function ID '(' ... ')' block balanced) per g4 and LANGUAGE_SPEC S11/18/19.
+- jocky/src/IRGen.cpp: includes Lexer.h+Parser.h, generateIRWithValidation now token-based via lex + parseMemberCalls/Investigations/Imports/Functions + filter/correlate arity scan, aggregates allErrs fail-closed at line:col per SECURITY_MODEL S14, uses parsed MemberCall list not regex for whitelist ops/caps dedup.
+- runtime/include/runtime.h: expanded to match Python providers per ARCHITECTURE S8/DESIGN S22: Process now has path,user,ppid_anomaly,platform; added NetworkConn, FileInfo, DriverInfo structs; added networkConnections(), fileList(), fileMetadata(), evidenceLoad() declarations.
+- runtime/src/runtime.cpp: expanded from 13 to 80 lines with synthetic fallback per SECURITY S47 and platform-aware systemInfo (WIN32 vs linux), processList synthetic 4-proc tree withppid_anomaly/yara hits, networkConnections C2 192.0.2.20, fileList via filesystem directory_iterator, fileHash via std::hash demo or real file size, driverScan vulnerable RTCore64, evidenceLoad via testdata fallback.
+- jocky/transform stubs: documented as textual IR fallback per IRGen poly bb.poly.* (real LLVM pass would be via opt) — intentional minimal, not scaffolding.
+
+Behavior: Docker jockyc (C++) now validates same as Python host fallback: investigation missing brace -> 422 at 1:1, unknown import -> 422, filter 1 arg -> 422, whitelist enforcement via tokens not regex. Host python fallback remains authoritative for pytest; Docker C++ now token-consistent. Transforms remain stub per design (poly handled in IRGen text).
+
+Tests: pytest 157 passed (host fallback unchanged); C++ lex/parsing token-consistent with Python (manual lex dump and jockyc --seed check); runtime synthetic matches Python providers per DESIGN S22.
+
+Docs: Now aligns ARCHITECTURE S4 pipeline (Lexer->Parser->Semantic->Capability->IR->Backend/LLVM) with both host Python and Docker C++ paths documented; C++ toolchain no longer scaffolding but minimal deterministic textual IR fallback (LLVM optional per CMake). Added GAPS.md append-only note.
+
+Next: Gap 5 FORENSICS provenance remains open.

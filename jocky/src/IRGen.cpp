@@ -1,4 +1,6 @@
 #include "jocky/IRGen.h"
+#include "jocky/Lexer.h"
+#include "jocky/Parser.h"
 #include <fstream>
 #include <sstream>
 #include <iomanip>
@@ -49,16 +51,72 @@ IRResult generateIRWithValidation(const std::string& jockySource, uint32_t seed,
   IRResult res;
   res.ir_version = 1;
   res.source_hash = sha12(jockySource);
-  // find all namespace.method calls via regex
-  std::regex re(R"(([a-zA-Z_][a-zA-Z0-9_]*)\.([a-zA-Z_][a-zA-Z0-9_]*)\s*\()");
-  std::sregex_iterator it(jockySource.begin(), jockySource.end(), re);
-  std::sregex_iterator end;
+  // Use lexer + parser for validation (Gap 4: token-based per g4, not just regex)
+  auto toks = lex(jockySource);
+  auto pr = parseMemberCalls(toks);
+  // Collect parser errors (investigation, imports, funcs, filter/correlate)
+  auto inv = parseInvestigations(toks);
+  auto imp = parseImports(toks);
+  auto fnc = parseFunctions(toks);
+  // Filter/correlate arity via simple string scan for now (mirrors Python's parse_lang_builtins)
+  std::vector<std::string> builtinErrs;
+  // Check for filter( and correlate( arity via regex on source for simplicity in C++ (kept per Python)
+  {
+    std::regex reFilter(R"(\bfilter\s*\()");
+    std::sregex_iterator it(jockySource.begin(), jockySource.end(), reFilter);
+    std::sregex_iterator end;
+    for(; it!=end; ++it){
+      size_t pos = it->position();
+      // find matching ')' and count commas at depth 1
+      size_t start = pos + it->str().size();
+      int depth=1; size_t j=start; int commas=0; bool hasContent=false;
+      while(j<jockySource.size() && depth>0){
+        char c=jockySource[j];
+        if(c=='(') depth++;
+        else if(c==')'){ depth--; if(depth==0) break; }
+        else if(c==',' && depth==1) commas++;
+        else if(!isspace((unsigned char)c) && depth==1) hasContent=true;
+        j++;
+      }
+      int args = hasContent ? commas+1 : 0;
+      if(args < 2) builtinErrs.push_back("filter() requires at least 2 args per LANGUAGE_SPEC §12 at col "+std::to_string(pos));
+    }
+    std::regex reCorr(R"(\bcorrelate\s*\()");
+    it = std::sregex_iterator(jockySource.begin(), jockySource.end(), reCorr);
+    for(; it!=end; ++it){
+      size_t pos = it->position();
+      size_t start = pos + it->str().size();
+      int depth=1; size_t j=start; int commas=0; bool hasContent=false;
+      while(j<jockySource.size() && depth>0){
+        char c=jockySource[j];
+        if(c=='(') depth++;
+        else if(c==')'){ depth--; if(depth==0) break; }
+        else if(c==',' && depth==1) commas++;
+        else if(!isspace((unsigned char)c) && depth==1) hasContent=true;
+        j++;
+      }
+      int args = hasContent ? commas+1 : 0;
+      if(args < 2) builtinErrs.push_back("correlate() requires at least 2 args per LANGUAGE_SPEC §15 at col "+std::to_string(pos));
+    }
+  }
+  // Aggregate all parser errors first (fail-closed)
+  std::vector<std::string> allErrs;
+  allErrs.insert(allErrs.end(), pr.errors.begin(), pr.errors.end());
+  allErrs.insert(allErrs.end(), inv.second.begin(), inv.second.end());
+  allErrs.insert(allErrs.end(), imp.second.begin(), imp.second.end());
+  allErrs.insert(allErrs.end(), fnc.second.begin(), fnc.second.end());
+  allErrs.insert(allErrs.end(), builtinErrs.begin(), builtinErrs.end());
+  if(!allErrs.empty()){
+    res.code = 2;
+    std::string msg;
+    for(size_t i=0;i<allErrs.size();i++){ if(i) msg+=", "; msg+=allErrs[i]; }
+    res.error = msg;
+    return res;
+  }
+  // Build found list from parsed MemberCalls (not regex)
   std::vector<std::pair<std::string,std::string>> found;
-  for(; it!=end; ++it){
-    std::string ns = (*it)[1].str();
-    std::string meth = (*it)[2].str();
-    std::string key = ns + "." + meth;
-    found.push_back({ns, key});
+  for(auto &c: pr.calls){
+    found.push_back({c.ns, c.ns+"."+c.method});
   }
   // validate: each found must be in whitelist; also track unique ops/caps
   std::unordered_set<std::string> seen;

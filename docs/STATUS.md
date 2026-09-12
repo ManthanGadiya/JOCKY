@@ -3,7 +3,7 @@
 **Document:** `STATUS.md`
 **Project:** JOCKY
 **Status:** Active Development
-**Last Updated:** 2026-09-12 — Gap 3 (IR JSON/SSA) closed (Gaps 1-3 done)
+**Last Updated:** 2026-09-12 — Gap 4 (C++ Pipeline) closed (Gaps 1-4 done)
 
 ---
 
