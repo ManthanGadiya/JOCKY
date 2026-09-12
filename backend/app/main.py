@@ -6,7 +6,10 @@ from typing import Optional, List, Dict, Any
 import hashlib, time, json, re, random, uuid, datetime, io, os
 
 app = FastAPI(title="JOCKY Backend - Central Forensics (L5+L6+ E2E)", version="1.2.0")
-app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
+# CORS per SECURITY_MODEL §41 + ROADMAP Phase 16: env CORS_ORIGINS restricts origins in prod (comma-separated), default "*" for host tests/lab per CHECKS.md
+_cors_origins = os.getenv("CORS_ORIGINS", "*")
+_cors_list = [o.strip() for o in _cors_origins.split(",")] if _cors_origins != "*" else ["*"]
+app.add_middleware(CORSMiddleware, allow_origins=_cors_list, allow_methods=["*"], allow_headers=["*"])
 
 # In-memory stores (fallback when Postgres not reachable — host tests)
 cases: List[Dict[str, Any]] = []
@@ -371,14 +374,41 @@ def extract_file_arg(source: str, op: str) -> str:
 def validate_path(path: str):
     if not path:
         return
-    if ".." in path or "\x00" in path:
-        raise ValueError(f"Path traversal rejected: {path!r} — contains .. or null byte (SECURITY_MODEL path security)")
-    # allow only safe roots for demo: normalize and reject absolute escapes like /etc/passwd sensitive
-    # For lab we allow /evidence/, /tmp/, C:\, sample.exe, memory.dump etc but reject ../../
-    if path.startswith("/") and not (path.startswith("/evidence/") or path.startswith("/tmp/") or path.startswith("/var/log/") or path.startswith("/sample") or path.startswith("/evidence")):
-        # still allow generic lab paths containing evidence
-        if "passwd" in path or "shadow" in path or "windows/system32/config" in path.lower():
-            raise ValueError(f"Path rejected: {path!r} — outside allowed evidence roots")
+    if ".." in path or "\x00" in path or "%00" in path:
+        raise ValueError(f"Path traversal rejected: {path!r} — contains .. or null byte (SECURITY_MODEL §26 path security)")
+    # Sensitive patterns per SECURITY_MODEL §26 + ROADMAP Phase 16 Hardening — block credential/config exfil (component-aware, not substring "sam" in "sample")
+    lower = path.lower()
+    # Normalize separators to / for component check
+    norm = lower.replace("\\","/")
+    parts = [p for p in norm.split("/") if p]
+    sensitive_components = {"passwd","shadow","gshadow","sam","security","ntds.dit"}
+    sensitive_paths = ["/etc/passwd","/etc/shadow","/etc/gshadow","/etc/hosts","/proc/self/environ","/proc/kcore","windows/system32/config","ntds.dit"]
+    if any(p in sensitive_components for p in parts):
+        # But allow sample.exe containing 'sam' as substring? Already component check is exact, so sample.exe not flagged
+        # Check that component is exactly sam/security etc., not sample
+        # For sample.exe, parts are ["evidence","sample.exe"] — not equal to sam
+        raise ValueError(f"Path rejected: {path!r} — matches sensitive component {parts} (SECURITY_MODEL §26)")
+    for pat in sensitive_paths:
+        if pat in norm:
+            raise ValueError(f"Path rejected: {path!r} — matches sensitive pattern {pat!r} (SECURITY_MODEL §26)")
+    # Allowlist for lab — per FORENSICS §61 + SECURITY §26: only controlled evidence roots
+    allowed_prefixes = ["/evidence/","/tmp/","/var/log/","/app/testdata","testdata","./testdata","evidence/","sample.exe","memory.dump","hollowing.json","byovd_driver.json","polymorphic","timeline.json","C:\\Evidence\\","C:\\Temp\\","C:/Evidence/","C:/Temp/"]
+    # Relative bare filenames like "sample.exe" or "hollowing.json" are allowed via testdata fallback
+    if any(path.startswith(p) for p in allowed_prefixes) or "/" not in path and "\\" not in path:
+        return
+    # Absolute Linux paths must be under allowed roots
+    if path.startswith("/"):
+        if not any(path.startswith(ap) for ap in ["/evidence/","/tmp/","/var/log/","/app/testdata","/app/"]):
+            # Allow /sample etc via len check but already covered; otherwise reject
+            raise ValueError(f"Path rejected: {path!r} — outside allowed evidence roots {allowed_prefixes} (SECURITY_MODEL §26)")
+    # Windows absolute C:\ must be under allowed
+    if len(path) >= 2 and path[1] == ":" and path[0].isalpha():
+        if not any(lower.startswith(ap.lower()) for ap in ["c:\\evidence\\","c:\\temp\\","c:/evidence/","c:/temp/","c:\\windows\\temp"]):
+            # Allow bare C:\sample.exe etc if not sensitive already checked
+            if "\\" in path or "/" in path:
+                # Require evidence substring for other C:\ paths
+                if "evidence" not in lower and "sample" not in lower and "temp" not in lower:
+                    raise ValueError(f"Path rejected: {path!r} — Windows path outside allowed roots (SECURITY_MODEL §26)")
 
 def _extract_investigation_titles(source: str):
     import re as _re

@@ -6,6 +6,19 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/) and [Sem
 
 ## [Unreleased]
 
+## 2026-09-12 — Gap 6/7: SECURITY_MODEL / ROADMAP Phase 16 Hardening — path allowlist + CORS env + secret mgmt + TLS headers (157 tests, no new count)
+
+### Added
+- `backend/app/main.py` `validate_path`: hardened allowlist per SECURITY §26 — component-exact sensitive (passwd/shadow/sam etc) + sensitive paths (/etc/passwd, windows/system32/config) with separator-aware `norm.replace("\\","/")`, not substring `sam` in `sample`; allowlist `/evidence/ /tmp/ /var/log/ /app/testdata C:\Evidence\ C:\Temp\` + absolute `/` and `C:\` enforcement outside allowed roots → `400`.
+- `backend/app/main.py` `CORS`: `CORS_ORIGINS` env (comma-separated) default `*` for host, prod restricts per SECURITY §41.
+- `backend/app/auth.py`: fail-closed `RuntimeError` if `AUTH_REQUIRED=true` and `JWT_SECRET` is default `change-me-*` per SECURITY §14/§28.
+- `.gitignore`: ` .env` + `!.env.example` (was `.env.local` only) — stop tracking secrets.
+- `.env.example`: strong placeholder `JWT_SECRET=CHANGE_ME_TO_STRONG_RANDOM_32_CHARS_MIN` etc per SECURITY §28.
+- `nginx/nginx.conf`: hardening headers `X-Content-Type-Options nosniff`, `X-Frame-Options DENY`, `Referrer-Policy`, commented TLS 443 block with `ssl_certificate` `TLSv1.2 TLSv1.3` per Phase 16.
+
+### Verified
+- `file.hash /evidence/sample.exe` still `200`, `/tmp/malware.exe` `200`, `../../etc/passwd` `400` traversal, `/etc/passwd` `400`, `C:\Windows\System32\config\SAM` `400`; `pytest -q` 157 passed.
+
 ## 2026-09-12 — Gap 5: FORENSICS §6–43 Provenance & Integrity — full bundle + verify endpoints (157 tests, no new count)
 
 ### Added
