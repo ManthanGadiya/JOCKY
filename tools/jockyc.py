@@ -5,7 +5,7 @@ Same IR logic as jocky/src/IRGen.cpp, generates .ll with polymorphic transforms
 Now with IR_VERSION=1 + capability validation (fail-closed) per SECURITY_MODEL
 Usage: python tools/jockyc.py examples/test.jocky -o build/a.ll [--polymorphic] [--seed N]
 """
-import sys, os, re, random, hashlib, argparse, pathlib
+import sys, os, re, random, hashlib, argparse, pathlib, json
 # Grammar-wired lexer per grammar/jocky.g4 + jocky/src/Lexer.cpp
 # Replaces RE_CALL regex with real tokenization — see tools/jocky_lexer.py
 try:
@@ -186,6 +186,25 @@ def main():
         sys.exit(2)
     pathlib.Path(args.output).parent.mkdir(parents=True, exist_ok=True)
     pathlib.Path(args.output).write_text(ir, encoding="utf-8")
+    # Gap 3: write deterministic IR JSON sidecar per IR_SPEC §32
+    try:
+        from tools.jocky_lexer import build_ir_json as _build_json, validate_ir_json as _validate_json
+        has_json=True
+    except ImportError:
+        try:
+            from jocky_lexer import build_ir_json as _build_json, validate_ir_json as _validate_json
+            has_json=True
+        except Exception:
+            has_json=False
+    if has_json:
+        try:
+            ir_json = _build_json(src, seed, args.polymorphic)
+            errs = _validate_json(ir_json)
+            if errs:
+                print(f"IR JSON validation warnings: {errs}", file=sys.stderr)
+            pathlib.Path(args.output + ".json").write_text(json.dumps(ir_json, indent=2), encoding="utf-8")
+        except Exception as je:
+            print(f"IR JSON build failed: {je}", file=sys.stderr)
     ops, caps, _ = validate_and_collect(src)
     # Real tokens dump per grammar/jocky.g4 + jocky/src/Lexer.cpp
     try:

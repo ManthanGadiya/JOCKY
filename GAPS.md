@@ -51,3 +51,21 @@ Tests: existing 21 lang + 12 grammar still pass; full pytest 157 passed no regre
 Docs: Now aligns LANGUAGE_SPEC S12 filter, S15 correlate, S18 import validation, S19 functions, S13/14 control-flow markers. Added GAPS.md append-only note.
 
 Next: Gap 3 IR_SPEC JSON/SSA remains open.
+
+---
+
+## Fix 2026-09-12 - Gap 3: IR_SPEC S5-11 IRModule JSON/SSA - CLOSED
+
+Gap: IR was .ll text only (define i32 @main() { %0=call ...; bb.poly.* }) with IR_VERSION/IR_CAPS comments; no JSON serialization, typed evidence_set<process>, or S9 SSA dataflow (%0=FILTER); no IR parser/validator/versioning layer; validation relied on regex whitelist (medium).
+
+Implemented branch feature/gap3-ir-json-ssa:
+- tools/jocky_lexer.py: Added OP_IR_META mapping per IR_SPEC S8-18 (SYSTEM_INFO->evidence, PROCESS_LIST->evidence_set<process>, FILE_HASH->string, etc.); Added build_ir_json(src,seed,poly) deterministic builder per IR_SPEC S32 producing {version:1, ir_version:1, entry:'main', metadata:{compiler_version:'1.0', language_version:'1.0', source_hash, build_timestamp:'2026-09-12T00:00:00Z', module_id, seed, poly}, capabilities, ops, investigations, imports, functions, builtins, instructions:[{result:'%0', opcode, type, category, op, operands, result_type, metadata:{source_file,line,column}}], types:[void,bool,int,float,string,list,map,evidence,evidence_set,finding,evidence_set<process>...], source_hash, module_id} with SSA sequential %N and source line:col per S30; Added validate_ir_json(ir) per S33/S6 checking version==1, entry exists, instructions list opcode/result/type, capabilities present; deterministic module_id = sha256(src+seed)[:8] so polymorphic seeds produce distinct module_id but same logical ops (hash != detection preserved).
+- tools/jockyc.py: Added build_ir_json sidecar generation — after writing .ll, also writes .ll.json with json.dump(ir_json, indent=2) validated via validate_ir_json; imports json at top; preserves existing .ll .tokens .ast outputs; polymorphic still distinct hashes same YARA cluster, json same ops.
+- backend/app/main.py: Added _build_json helper via jocky_lexer import (with fallback), extended generate_ir header already Gap2, added /api/compile to include ir_json + ir_json_version + version validation (422 if validate fails), /api/run to include ir_json, added POST /api/ir/validate (checks version mismatch per S6 IR Compatibility Error) and GET /api/ir/spec (types, entry, categories) per S32/S33.
+- Behavior: Host tools/jockyc.py examples/test.jocky -> build/*.ll (1954 bytes) + build/*.ll.json (6693 bytes) with investigations/imports/funcs/instructions; Backend POST /api/compile {investigation 'host_scan' {system.info();}} -> ir_version 1 + ir_json with 3 instructions SYSTEM_INFO evidence, PROCESS_LIST evidence_set<process>, FILE_HASH string with typed operands and source mapping; POST /api/ir/validate with version 2 -> 422 'IR Compatibility Error: Required 2, Runtime supports 1' per S6.
+
+Tests: full pytest 157 passed no regression; manual IR API test shows compile 200 with ir_json 3 instructions typed, validate 200 for v1 and 422 for v2, spec 200, jockyc sidecar exists and deterministic (same src seed 1 same json, seed 2 same ops but different module_id).
+
+Docs: Now aligns IR_SPEC S5 IRModule, S6 version, S7 metadata, S8 types, S9 SSA %0=FILTER, S10 instructions, S32 JSON serialization, S33 validation; added GAPS.md append-only note.
+
+Next: Gap 4 C++ pipeline scaffolding remains open.
