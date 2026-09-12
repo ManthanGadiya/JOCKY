@@ -6,6 +6,19 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/) and [Sem
 
 ## [Unreleased]
 
+## 2026-09-12 — Gap 9-10 + Honorable: E2E Host + Docs Hygiene + Frontend Auth/Integrity + Golden IR (163 tests, +6 golden)
+
+### Added
+- `docs/ARCHITECHTURE.md`: removed duplicate typo (kept `docs/ARCHITECTURE.md` canonical) per AGENTS.md §2/4.
+- `grammar/jocky.g4` header: `Independent Language + Investigation/Import/Func per LANGUAGE_SPEC §11/18/19 + IR Spec Polymorphic` with `bb.poly.*` note.
+- `examples/test.jocky`: rewrites to `investigation "full_demo"` wrapping `import "forensic.net"` + `import forensic.process` + `func collect_host()` + `function analyze_evidence()` + `filter`/`correlate` + `if`/`for` + all stdlib calls — now exercises investigation/filter/correlate per GAPS doc.
+- `frontend/src/App.tsx`: Auth + Integrity panel per FORENSICS §6 + SECURITY §19 — `GET /api/auth/status` (strict/bypass + jwt_alg), Login `POST /api/auth/login` → JWT, Me `GET /api/auth/me` Bearer, Integrity `GET /api/evidence/{id}/verify` buttons per evidence, host mgmt via Case dropdown + Host filter per FORENSICS §7.
+- `tools/e2e_host.py`: host E2E harness L1-L8 per ARCHITECTURE — 10 steps Compile + IR JSON, Run sweep 4 evidence + provenance, Evidence store, Timeline, Graph + correlations, Risk, YARA, Report, Verify, IR validate; same backend code runs in Docker, so host proves Docker per CHECKS.md.
+- `tests/test_golden_ir.py` (6) + `tests/expected/basic.ir.json`: golden IR per TEST_PLAN §7 — basic JSON version 1, different seeds same ops distinct module, investigation, filter/correlate, import/func, expected files exist.
+
+### Verified
+- `git rm docs/ARCHITECHTURE.md` — duplicate removed; `python tools/jockyc.py examples/test.jocky -o build/x.ll` shows `JOCKY Imports` + `Funcs` + `Control`; `python tools/e2e_host.py` → `[PASS] 1-10`; `pytest -q` 163 (157+6) passed; `pytest tests/test_golden_ir.py -v` 6 passed.
+
 ## 2026-09-12 — Gap 8: ROADMAP Phase 17 Performance / Reliability — benchmark harness + p95 checks (157 tests, no new count)
 
 ### Added

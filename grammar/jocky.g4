@@ -1,5 +1,6 @@
-// JOCKY Grammar - ANTLR4 - Independent Language + Investigation Blocks (LANGUAGE_SPEC §11)
-// Syntax: investigation "host_scan" { system.info(); } | process.list(); file.hash("a.exe"); system.info(); driver.scan("RTCore64.sys");
+// JOCKY Grammar - ANTLR4 - Independent Language + Investigation/Import/Func per LANGUAGE_SPEC §11/18/19 + IR Spec Polymorphic
+// Syntax: investigation "host_scan" { system.info(); } | import "forensic.net"; | func collect() { } | process.list(); file.hash("a.exe"); system.info(); driver.scan("RTCore64.sys");
+// Note: Textual IR fallback uses bb.poly.* for cfg-flatten per IRGen poly, string-encrypt, import-obfuscate — same logical YARA hits (hash != detection) per IR_SPEC & CHECKS.md
 grammar jocky;
 
 program : statement* EOF ;

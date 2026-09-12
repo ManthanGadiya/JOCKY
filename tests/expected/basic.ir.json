@@ -1,0 +1,92 @@
+{
+  "version": 1,
+  "ir_version": 1,
+  "entry": "main",
+  "metadata": {
+    "compiler_version": "1.0",
+    "language_version": "1.0",
+    "source_hash": "6fb6278574ce",
+    "build_timestamp": "2026-09-12T00:00:00Z",
+    "module_id": "11337bd8",
+    "seed": 1,
+    "poly": false
+  },
+  "capabilities": [
+    "system.read",
+    "process.read",
+    "file.hash"
+  ],
+  "ops": [
+    "system.info",
+    "process.list",
+    "file.hash"
+  ],
+  "investigations": [],
+  "imports": [],
+  "functions": [],
+  "builtins": [],
+  "instructions": [
+    {
+      "result": "%0",
+      "opcode": "SYSTEM_INFO",
+      "type": "evidence",
+      "category": "system",
+      "op": "system.info",
+      "operands": [],
+      "result_type": "evidence",
+      "metadata": {
+        "source_file": "input.jocky",
+        "line": 1,
+        "column": 1
+      }
+    },
+    {
+      "result": "%1",
+      "opcode": "PROCESS_LIST",
+      "type": "evidence_set<process>",
+      "category": "process",
+      "op": "process.list",
+      "operands": [],
+      "result_type": "evidence_set<process>",
+      "metadata": {
+        "source_file": "input.jocky",
+        "line": 1,
+        "column": 16
+      }
+    },
+    {
+      "result": "%2",
+      "opcode": "FILE_HASH",
+      "type": "string",
+      "category": "file",
+      "op": "file.hash",
+      "operands": [
+        "/evidence/sample.exe"
+      ],
+      "result_type": "string",
+      "metadata": {
+        "source_file": "input.jocky",
+        "line": 1,
+        "column": 32
+      }
+    }
+  ],
+  "types": [
+    "void",
+    "bool",
+    "int",
+    "float",
+    "string",
+    "list",
+    "map",
+    "evidence",
+    "evidence_set",
+    "finding",
+    "evidence_set<process>",
+    "evidence_set<file>",
+    "evidence_set<network_connection>",
+    "evidence_set<driver>"
+  ],
+  "source_hash": "6fb6278574ce",
+  "module_id": "11337bd8"
+}
