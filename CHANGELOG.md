@@ -6,6 +6,14 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/) and [Sem
 
 ## [Unreleased]
 
+## 2026-09-12 — Gap 8: ROADMAP Phase 17 Performance / Reliability — benchmark harness + p95 checks (157 tests, no new count)
+
+### Added
+- `tools/perf_bench.py`: benchmark per Phase 17 — `validate_and_collect`+`build_ir_json` 50 samples, `POST /api/compile` 20 samples, `POST /api/run` 15 samples with `mean/p95/min/max`, writes `build/perf.json` per FORENSICS reproducibility, asserts `p95 <200ms` compile and `<500ms` API; host `python tools/perf_bench.py` → `0.07ms/9ms` well under thresholds.
+
+### Verified
+- `pytest -q` 157 passed; manual `python tools/perf_bench.py` → `p95 0.07ms compile, 9ms API` < thresholds, `build/perf.json` deterministic.
+
 ## 2026-09-12 — Gap 6/7: SECURITY_MODEL / ROADMAP Phase 16 Hardening — path allowlist + CORS env + secret mgmt + TLS headers (157 tests, no new count)
 
 ### Added
