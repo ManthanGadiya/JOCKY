@@ -27,6 +27,9 @@ export default function App(){
   const [lastRun, setLastRun] = useState<string>("")
   const [yara, setYara] = useState<any>(null)
   const [poly, setPoly] = useState<any>(null)
+  const [authStatus, setAuthStatus] = useState<any>(null)
+  const [authToken, setAuthToken] = useState<string>("")
+  const fetchAuth = async ()=>{ try{ const r=await fetch(`${API}/api/auth/status`).then(x=>x.json()); setAuthStatus(r) }catch{} }
   // Case isolation + host/filter per ARCHITECTURE §11 + FORENSICS §7 (evidence must belong to case) + ROADMAP §11
   const [hostFilter, setHostFilter] = useState<string>("all")
   const [typeFilter, setTypeFilter] = useState<string>("all")
@@ -83,10 +86,10 @@ export default function App(){
     }catch(e:any){ setError(e.message||String(e)) }
   }
 
-  useEffect(()=>{ refresh(caseId); fetchYara() },[caseId])
+  useEffect(()=>{ refresh(caseId); fetchYara(); fetchAuth() },[caseId])
   // poll every 5s for live updates
   useEffect(()=>{
-    const id=setInterval(()=>{ refresh(caseId); fetchYara() }, 5000)
+    const id=setInterval(()=>{ refresh(caseId); fetchYara(); fetchAuth() }, 5000)
     return ()=>clearInterval(id)
   },[caseId])
 
@@ -198,6 +201,28 @@ export default function App(){
           {poly && <div className="mt-1 text-green-400">distinct_hashes={String(poly.distinct_hashes)} same_yara_cluster={String(poly.same_yara_cluster)} — Point 2 proven</div>}
         </div>
         <div className="text-xs text-zinc-500 mt-1">Frontend also shows IR YARA hits after Run: each evidence YARA hit • <a className="underline" href="http://localhost:8000/api/yara/status" target="_blank">/api/yara/status</a> • <a className="underline" href="http://localhost:8000/docs" target="_blank">/api/docs</a></div>
+      </div>
+
+      {/* Auth + Integrity per FORENSICS §6 + SECURITY §19 — Gap 9/10 docs + frontend */}
+      <div className="grid grid-cols-12 gap-4 mb-6">
+        <div className="col-span-6 bg-zinc-900 rounded-xl p-4 border border-zinc-800">
+          <h3 className="font-semibold text-sm flex justify-between">Auth — Investigator <span className="text-xs bg-zinc-800 px-2 py-1 rounded">{authStatus?.auth_required ? 'strict 401' : 'bypass (lab)'} • {authStatus?.jwt_alg||'HS256'}</span></h3>
+          <p className="text-xs text-zinc-500 mt-1">POST /api/auth/login → JWT bearer • GET /api/auth/me • <a className="underline" href={`${API}/api/auth/status`} target="_blank">/auth/status</a> {authToken && `• token ${authToken.slice(0,12)}…`}</p>
+          <div className="flex gap-2 mt-2">
+            <button onClick={async()=>{ const r=await fetch(`${API}/api/auth/login`,{method:'POST',headers:{'Content-Type':'application/json'},body: JSON.stringify({username:'analyst', password:'demo'})}); const j=await r.json(); setAuthToken(j.access_token||''); setLastRun(`Login OK — ${j.access_token.slice(0,12)}…`) }} className="text-xs bg-violet-600 hover:bg-violet-500 px-3 py-1 rounded">Login analyst</button>
+            <button onClick={async()=>{ const h:any={}; if(authToken) h['Authorization']=`Bearer ${authToken}`; const r=await fetch(`${API}/api/auth/me`,{headers:h}); const j=await r.json(); setLastRun(`Me: ${JSON.stringify(j.user||j)}`) }} className="text-xs bg-zinc-800 px-3 py-1 rounded">Me</button>
+          </div>
+          <p className="text-xs text-zinc-600 mt-1">Host panel: lab bypass per .env AUTH_REQUIRED=false; prod set AUTH_REQUIRED=true + strong JWT_SECRET per .env.example</p>
+        </div>
+        <div className="col-span-6 bg-zinc-900 rounded-xl p-4 border border-zinc-800">
+          <h3 className="font-semibold text-sm">Evidence Integrity — SHA256(canonical) • <span className="text-xs bg-zinc-800 px-2 py-1 rounded">{evidence.length} envelopes</span></h3>
+          <p className="text-xs text-zinc-500 mt-1">Each envelope: SHA256(sort_keys payload) + provenance + chain_of_custody • <a className="underline" href={`${API}/api/evidence/verify`} target="_blank">POST /verify</a> • <a className="underline" href={`${API}/docs`} target="_blank">/docs</a></p>
+          <div className="flex gap-2 mt-2 flex-wrap">
+            {evidence.slice(-3).map((e:any)=><button key={e.id} onClick={async()=>{ const r=await fetch(`${API}/api/evidence/${e.id}/verify`).then(x=>x.json()); alert(`Verify ${e.id}: ${r.verified?'✅ verified':'❌ tampered'} • ${r.expected_sha256.slice(0,12)}…`) }} className="text-xs bg-zinc-800 px-2 py-1 rounded">{e.id} verify</button>)}
+            {evidence.length===0 && <span className="text-xs text-zinc-600">No evidence yet — Run a sweep then verify</span>}
+          </div>
+          <p className="text-xs text-zinc-600 mt-1">Host management: use Case dropdown + Host filter above (isolates per FORENSICS §7); selected evidence shows integrity SHA</p>
+        </div>
       </div>
 
       {/* JOCKY Editor — First Milestone */}
