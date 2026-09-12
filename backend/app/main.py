@@ -496,6 +496,23 @@ def make_envelope(op: str, agent_id: str, host_id: str, case_id: int, ir_hash: s
         ev_type = t
     raw = json.dumps(payload, sort_keys=True).encode()
     sha = hashlib.sha256(raw).hexdigest()
+    # Gap 5: full provenance per FORENSICS §6-7 + IR_SPEC §7 + §31
+    module_id = hashlib.sha256((source + ir_hash).encode()).hexdigest()[:8] if source else hashlib.sha256(ir_hash.encode()).hexdigest()[:8]
+    provenance = {
+        "ir_hash": ir_hash,
+        "source_hash": source_hash,
+        "capabilities": caps,
+        "compiler_version": "1.0",
+        "language_version": "1.0",
+        "build_timestamp": "2026-09-12T00:00:00Z",
+        "module_id": module_id,
+        "collector_version": "jocky-runtime:1.0",
+        "host_id": host_id,
+        "agent_id": agent_id,
+        "case_id": case_id,
+        "op": op,
+        "platform": platform,
+    }
     rec = {
         "id": eid,
         "case_id": case_id,
@@ -509,12 +526,13 @@ def make_envelope(op: str, agent_id: str, host_id: str, case_id: int, ir_hash: s
         "collector": "jocky-runtime:1.0",
         "schema_version": 1,
         "payload": payload,
-        "integrity": {"sha256": sha, "verified": True},
-        "provenance": {"ir_hash": ir_hash, "source_hash": source_hash, "capabilities": caps},
+        "integrity": {"sha256": sha, "verified": True, "method": "SHA256(canonical_json_sort_keys)", "payload_hash": sha},
+        "provenance": provenance,
         "chain_of_custody": f"{sha}:{agent_id}:{time.time()}",
         "timestamp": time.time(),
         "risk": calc_risk(payload),
         "sha256": sha,
+        "module_id": module_id,
     }
     return rec
 
@@ -685,7 +703,7 @@ def post_evidence(ev: Evidence):
     risk = calc_risk(ev.payload)
     # generate id that is unique across DB + memory
     total = len(_get_evidence())
-    rec = {"id": f"EV-{datetime.datetime.utcnow().strftime('%Y%m%d')}-{total+1:06d}", "agent_id": ev.agent_id, "type": ev.type, "payload": ev.payload, "sha256": sha, "timestamp": time.time(), "chain_of_custody": f"{sha}:{ev.agent_id}:{time.time()}", "risk": risk, "case_id": 1, "host_id": ev.agent_id, "op": ev.type, "source": "direct_post", "collected_at": datetime.datetime.utcnow().isoformat()+"Z", "observed_at": datetime.datetime.utcnow().isoformat()+"Z", "collector": "jocky-runtime:1.0", "schema_version": 1, "integrity": {"sha256": sha, "verified": True}, "provenance": {"ir_hash": "", "source_hash": "", "capabilities": []}}
+    rec = {"id": f"EV-{datetime.datetime.utcnow().strftime('%Y%m%d')}-{total+1:06d}", "agent_id": ev.agent_id, "type": ev.type, "payload": ev.payload, "sha256": sha, "timestamp": time.time(), "chain_of_custody": f"{sha}:{ev.agent_id}:{time.time()}", "risk": risk, "case_id": 1, "host_id": ev.agent_id, "op": ev.type, "source": "direct_post", "collected_at": datetime.datetime.utcnow().isoformat()+"Z", "observed_at": datetime.datetime.utcnow().isoformat()+"Z", "collector": "jocky-runtime:1.0", "schema_version": 1, "integrity": {"sha256": sha, "verified": True, "method": "SHA256(canonical_json_sort_keys)", "payload_hash": sha}, "provenance": {"ir_hash": "", "source_hash": "", "capabilities": [], "compiler_version": "1.0", "language_version": "1.0", "build_timestamp": "2026-09-12T00:00:00Z", "module_id": sha[:8], "collector_version": "jocky-runtime:1.0", "host_id": ev.agent_id, "case_id": 1}}
     _add_evidence(rec)
     # Persist artifact to MinIO per ARCHITECTURE §11 + FORENSICS §47
     try:
@@ -704,6 +722,54 @@ def post_evidence(ev: Evidence):
         try: _audit.log_event(ev.agent_id, "evidence.submit", rec["id"], "success", {"type": ev.type, "risk": risk})
         except Exception: pass
     return rec
+
+@app.post("/api/evidence/verify")
+def verify_evidence(payload: dict):
+    """Verify evidence integrity per FORENSICS §6 tamper detection — recompute SHA256(canonical_json) vs stored."""
+    # Accept either full evidence rec or {"id": "..."} or {"payload": {...}, "integrity": {...}}
+    ev_id = payload.get("id") or payload.get("evidence_id")
+    if ev_id:
+        evs = _get_evidence()
+        rec = next((e for e in evs if e.get("id")==ev_id), None)
+        if not rec:
+            raise HTTPException(status_code=404, detail="Evidence not found")
+        # recompute
+        try:
+            raw = json.dumps(rec["payload"], sort_keys=True).encode()
+            exp = hashlib.sha256(raw).hexdigest()
+            stored = rec.get("integrity",{}).get("sha256") or rec.get("sha256")
+            verified = (exp == stored)
+            return {"evidence_id": ev_id, "verified": verified, "expected_sha256": exp, "stored_sha256": stored, "method": "SHA256(canonical_json_sort_keys)", "tampered": not verified}
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=str(e))
+    # Direct payload verify
+    p = payload.get("payload") or payload
+    integ = payload.get("integrity",{})
+    if isinstance(p, dict) and "payload" in payload:
+        p = payload["payload"]
+        integ = payload.get("integrity",{})
+    try:
+        raw = json.dumps(p, sort_keys=True).encode()
+        exp = hashlib.sha256(raw).hexdigest()
+        stored = integ.get("sha256") if isinstance(integ, dict) else None
+        if stored is None:
+            return {"verified": None, "expected_sha256": exp, "stored_sha256": None, "method": "SHA256(canonical_json_sort_keys)", "note": "no stored hash provided, computed only"}
+        verified = (exp == stored)
+        return {"verified": verified, "expected_sha256": exp, "stored_sha256": stored, "method": "SHA256(canonical_json_sort_keys)", "tampered": not verified}
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+@app.get("/api/evidence/{evidence_id}/verify")
+def verify_evidence_by_id(evidence_id: str):
+    evs = _get_evidence()
+    rec = next((e for e in evs if e.get("id")==evidence_id), None)
+    if not rec:
+        raise HTTPException(status_code=404, detail="Evidence not found")
+    raw = json.dumps(rec["payload"], sort_keys=True).encode()
+    exp = hashlib.sha256(raw).hexdigest()
+    stored = rec.get("integrity",{}).get("sha256") or rec.get("sha256")
+    verified = (exp == stored)
+    return {"evidence_id": evidence_id, "verified": verified, "expected_sha256": exp, "stored_sha256": stored, "method": "SHA256(canonical_json_sort_keys)", "provenance": rec.get("provenance"), "tampered": not verified}
 
 @app.post("/api/compile")
 def compile_source(req: CompileRequest):

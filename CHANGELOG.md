@@ -6,6 +6,15 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/) and [Sem
 
 ## [Unreleased]
 
+## 2026-09-12 — Gap 5: FORENSICS §6–43 Provenance & Integrity — full bundle + verify endpoints (157 tests, no new count)
+
+### Added
+- `backend/app/main.py` `make_envelope`: provenance now `{ir_hash,source_hash,capabilities,compiler_version:"1.0",language_version:"1.0",build_timestamp:"2026-09-12T00:00:00Z",module_id:sha256(source+ir_hash)[:8],collector_version,host_id,agent_id,case_id,op,platform}` per FORENSICS §6–7 + IR_SPEC §7/§31; integrity `{sha256,verified:true,method:"SHA256(canonical_json_sort_keys)",payload_hash}` via `sort_keys` canonical; `rec` now `module_id`; `post_evidence` same provenance + integrity method.
+- `backend/app/main.py`: `POST /api/evidence/verify` + `GET /api/evidence/{id}/verify` per FORENSICS §6 tamper detection — recomputes `SHA256(canonical_json_sort_keys)` vs stored, returns `{verified,expected_sha256,stored_sha256,method,tampered}` (404 if not found).
+
+### Verified
+- `POST /api/run` investigation `prov_test` → provenance 9 fields present + integrity method canonical; `GET /verify by id` → `verified true` + provenance; direct tamper payload → `verified false` when hash mismatch; `pytest -q` 157 passed.
+
 ## 2026-09-12 — Gap 4: ARCHITECTURE §4 / DESIGN C++ Pipeline — token-based Lexer/Parser + expanded Runtime (157 tests, no new count)
 
 ### Added

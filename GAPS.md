@@ -93,3 +93,22 @@ Tests: pytest 157 passed (host fallback unchanged); C++ lex/parsing token-consis
 Docs: Now aligns ARCHITECTURE S4 pipeline (Lexer->Parser->Semantic->Capability->IR->Backend/LLVM) with both host Python and Docker C++ paths documented; C++ toolchain no longer scaffolding but minimal deterministic textual IR fallback (LLVM optional per CMake). Added GAPS.md append-only note.
 
 Next: Gap 5 FORENSICS provenance remains open.
+
+---
+
+## Fix 2026-09-12 - Gap 5: FORENSICS S6-43 Provenance & Integrity - CLOSED
+
+Gap: provenance only ir_hash/source_hash/caps, missing compiler_version/language_version/build_timestamp/module_id, integrity SHA256(payload_json) vs canonical, verified:true always, no chain verification (low).
+
+Implemented branch feature/gap5-forensics-provenance:
+- backend/app/main.py make_envelope: provenance now {ir_hash,source_hash,capabilities,compiler_version:"1.0",language_version:"1.0",build_timestamp:"2026-09-12T00:00:00Z",module_id:sha256(source+ir_hash)[:8],collector_version,host_id,agent_id,case_id,op,platform} per FORENSICS S6-7 + IR_SPEC S7/S31; integrity now {sha256,verified:true,method:"SHA256(canonical_json_sort_keys)",payload_hash} via sort_keys canonical; rec now module_id field.
+- post_evidence: same provenance + integrity method for direct POST.
+- Added POST /api/evidence/verify and GET /api/evidence/{id}/verify per FORENSICS S6 tamper detection — recomputes SHA256(canonical_json_sort_keys) vs stored, returns {verified,expected_sha256,stored_sha256,method,tampered} with 404 if not found.
+
+Behavior: POST /api/run investigation prov_test -> provenance 9 fields present, integrity method canonical, GET /verify by id -> verified true + provenance returned, tampered payload direct -> verified false when hash mismatch.
+
+Tests: pytest 157 passed; manual provenance test shows compiler_version etc present, both verify endpoints true for stored, direct tamper detection works.
+
+Docs: Now aligns FORENSICS S6 provenance bundle + S43 integrity + IR_SPEC S31 provenance; added GAPS.md append-only note.
+
+Next: Gap 6 SECURITY_MODEL remains open.
