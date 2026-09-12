@@ -1,11 +1,12 @@
-// JOCKY Grammar - ANTLR4 - Point 1: Independent Language
-// Syntax: process.list(); file.hash("a.exe"); system.info(); driver.scan("RTCore64.sys");
+// JOCKY Grammar - ANTLR4 - Independent Language + Investigation Blocks (LANGUAGE_SPEC §11)
+// Syntax: investigation "host_scan" { system.info(); } | process.list(); file.hash("a.exe"); system.info(); driver.scan("RTCore64.sys");
 grammar jocky;
 
 program : statement* EOF ;
 
 statement
-  : varDecl
+  : investigationStmt
+  | varDecl
   | assignment
   | exprStmt
   | ifStmt
@@ -16,6 +17,7 @@ statement
   | importStmt
   ;
 
+investigationStmt : 'investigation' STRING block ;
 importStmt : 'import' STRING ';' ;
 varDecl    : 'let' ID ('=' expr)? ';' ;
 assignment : ID '=' expr ';' ;

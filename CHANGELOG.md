@@ -6,6 +6,18 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/) and [Sem
 
 ## [Unreleased]
 
+## 2026-09-12 — Gap 1: LANGUAGE_SPEC §11 Investigation Blocks — grammar-wired block scoping (157 tests, no new count)
+
+### Added
+- `grammar/jocky.g4`: `investigationStmt : 'investigation' STRING block ;` as first `statement` alternative + header `Independent Language + Investigation Blocks (LANGUAGE_SPEC §11)` — closes Gap 1 where `jocky.g4` had no `investigation` rule and block `{}` was not enforced.
+- `tools/jocky_lexer.py`: `Investigation` dataclass + `parse_investigations(tokens)` enforcing `investigation STRING { ... }` with balanced `}` depth counting for nested `if/for` blocks inside; validates non-empty title; fail-closed `Syntax error: … at line:col` for missing title / missing `{` / empty title / unterminated block. `validate_and_collect()` now merges `inv_errors` so both host `tools/jockyc.py` and `backend/app/main.py /api/compile|run` return `422` with location.
+- `jocky/src/Lexer.cpp`: `kws` add `"investigation"` (11→12) to keep C++ reference lexer in sync.
+- `GAPS.md`: Append-only fix note for Gap 1 (no row deletion), verification with 5 invalid + 2 valid manual cases + `TestClient` `422` for all invalid.
+
+### Verified
+- `pytest tests/test_language_features.py tests/test_compiler_grammar.py` 21 passed (unchanged); `pytest -q` 157 passed no regression.
+- `POST /api/compile` + `POST /api/run` correctly `200` for `investigation "host_scan" { system.info(); process.list(); }` and `422` for `missing_brace` / `missing_string` / `empty_title` / `missing_lbrace` with `at X:Y` diagnostics.
+
 ## 2026-09-11 — Docker All Issues — healthcheck + agent timestamp/list (157 tests, no new count)
 
 ### Fixed

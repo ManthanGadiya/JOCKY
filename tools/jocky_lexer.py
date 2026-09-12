@@ -212,10 +212,15 @@ OP_CAPS = {
     "evidence.load": "evidence.read",
 }
 
+@dataclass
+class Investigation:
+    title: str
+    line: int
+    col: int
+
 def _extract_investigations(src: str):
-    """Extract investigation titles per LANGUAGE_SPEC §11: investigation \"name\" { ... }"""
+    """Legacy regex extraction — kept for fallback when token parse unavailable."""
     import re as _re
-    # allow investigation "title" { or investigation 'title' {
     pat = _re.compile(r'investigation\s+(?:"([^"]+)"|\'([^\']+)\')\s*\{', re.IGNORECASE)
     titles = []
     for m in pat.finditer(src):
@@ -224,12 +229,71 @@ def _extract_investigations(src: str):
             titles.append(title)
     return titles
 
+def parse_investigations(tokens: List[Token]) -> Tuple[List[Investigation], List[str]]:
+    """
+    Parse investigation blocks per LANGUAGE_SPEC §11 + grammar/jocky.g4 investigationStmt:
+      'investigation' STRING block
+    Enforces block scoping: title must be non-empty STRING, followed by '{' ... '}' with balanced braces.
+    Returns (investigations, errors). Errors are fail-closed syntax errors with line:col.
+    """
+    investigations: List[Investigation] = []
+    errors: List[str] = []
+    i = 0
+    while i < len(tokens):
+        t = tokens[i]
+        if t.kind == "KW" and t.text == "investigation":
+            # Expect STRING next
+            if i + 1 >= len(tokens) or tokens[i + 1].kind != "STRING":
+                errors.append(f"Syntax error: investigation requires string title at {t.line}:{t.col} — expected 'investigation \"name\" {{' per LANGUAGE_SPEC §11")
+                i += 1
+                continue
+            str_tok = tokens[i + 1]
+            # Extract inner title without quotes
+            raw = str_tok.text
+            title = raw[1:-1] if len(raw) >= 2 and raw[0] in ('"', "'") and raw[-1] == raw[0] else raw
+            if not title.strip():
+                errors.append(f"Investigation title cannot be empty per LANGUAGE_SPEC §11 at {str_tok.line}:{str_tok.col}")
+            # Expect LBRACE
+            if i + 2 >= len(tokens) or tokens[i + 2].kind != "LBRACE":
+                errors.append(f"Syntax error: investigation \"{title}\" missing '{{' at {str_tok.line}:{str_tok.col} — expected block per grammar/jocky.g4 investigationStmt")
+                i += 2
+                continue
+            # Find matching RBRACE with depth counting (handles nested blocks: if/for/etc inside)
+            depth = 0
+            j = i + 2
+            found = False
+            while j < len(tokens):
+                if tokens[j].kind == "LBRACE":
+                    depth += 1
+                elif tokens[j].kind == "RBRACE":
+                    depth -= 1
+                    if depth == 0:
+                        found = True
+                        break
+                elif tokens[j].kind == "END":
+                    break
+                j += 1
+            if not found:
+                errors.append(f"Syntax error: unterminated investigation block \"{title}\" at {t.line}:{t.col} — missing matching '}}' per LANGUAGE_SPEC §11")
+                # Record investigation anyway for title tracking (so case title still attempted)
+                investigations.append(Investigation(title=title, line=t.line, col=t.col))
+                i = j
+                continue
+            investigations.append(Investigation(title=title, line=t.line, col=t.col))
+            # Jump past the closing brace; note that contents inside block will still be scanned for MemberCalls globally, no need to skip
+            i = j + 1
+            continue
+        i += 1
+    return investigations, errors
+
 def validate_and_collect(src: str):
     """
     Grammar-wired validation (replaces RE_CALL regex).
     Returns (ops, caps, errors) where errors include syntax + unknown cap.
     Errors are fail-closed per SECURITY_MODEL §14 + IR_SPEC §33.
     Supports LANGUAGE_SPEC §7 variables (ID = expr), §11 investigation blocks, §12 filter (as non-cap lang construct).
+    Investigation blocks are now grammar-enforced per grammar/jocky.g4 investigationStmt: 'investigation' STRING block
+    with balanced brace scoping and line:col diagnostics (Gap 1 fix).
     """
     tokens = lex(src)
     calls, syntax_errors = parse_member_calls(tokens)
@@ -237,12 +301,9 @@ def validate_and_collect(src: str):
     ops = []
     caps = []
     seen = set()
-    # Extract investigations for validation (they are language constructs, not forensic ops)
-    investigations = _extract_investigations(src)
-    # Validate investigation titles are non-empty
-    for title in investigations:
-        if not title.strip():
-            errors.append("Investigation title cannot be empty per LANGUAGE_SPEC §11")
+    # Parse investigation blocks with grammar-enforced block scoping (Gap 1)
+    investigations, inv_errors = parse_investigations(tokens)
+    errors.extend(inv_errors)
     # Filter calls are not forensic ops — they use evidence but not caps; ensure they have at least 1 arg
     # Detect filter( and correlate( as language built-ins per §12, §15
     import re as _re
