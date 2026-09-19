@@ -10,7 +10,7 @@ services:
     build: { context: ., dockerfile: agent/Dockerfile }
     image: jocky/agent:1.0
     volumes: ["./testdata:/app/testdata:ro"]
-    environment: [BACKEND_URL=http://nginx:80, AGENT_ID=WIN-001, HOST_ID=HOST-001, CASE_ID=1, JOCKY_SOURCE=system.info();process.list();file.hash("/evidence/sample.exe");network.connections();, FIXTURE_DIR=/app/testdata, AGENT_POLL_SECONDS=0]
+    environment: [BACKEND_URL=http://nginx:80, AGENT_ID=WIN-001, HOST_ID=HOST-001, CASE_ID=1, JOCKY_SOURCE=system.info();process.list();file.hash("/evidence/sample.exe");network.connections();, FIXTURE_DIR=/app/testdata, AGENT_POLL_SECONDS=0, JOCKY_DAEMON=0, JOCKY_DAEMON_INTERVAL=30, JOCKY_ENCRYPT_ALERTS=0, JOCKY_ENCRYPT_KEY=jocky-lab-key, JOCKY_USE_ETW=1, JOCKY_USE_EBPF=1]
     depends_on: { backend: { condition: service_healthy }, nginx: { condition: service_started } }
     healthcheck: { test: ["CMD-SHELL", "curl -sf http://nginx:80/health || exit 1"], interval: 30s, retries: 3, start_period: 15s }
     restart: "no"
@@ -19,7 +19,7 @@ services:
     build: { context: ./backend }
     image: jocky/backend:1.0
     ports: ["8000:8000"]
-    environment: [DATABASE_URL=postgresql://jocky:jocky@db:5432/jockydb, REDIS_URL=redis://redis:6379/0, MINIO_ENDPOINT=minio:9000, JWT_SECRET=change-me-in-prod]
+    environment: [DATABASE_URL=postgresql://jocky:jocky@db:5432/jockydb, REDIS_URL=redis://redis:6379/0, MINIO_ENDPOINT=minio:9000, JWT_SECRET=change-me-in-prod, JOCKY_USE_ETW=1, JOCKY_USE_EBPF=1, JOCKY_ENCRYPT_KEY=jocky-lab-key, JOCKY_PLATFORM=linux]
     volumes: ["./yara:/app/yara:ro", "./testdata:/app/testdata:ro"]
     depends_on: { db: { condition: service_healthy }, redis: { condition: service_started }, minio: { condition: service_started } }
     healthcheck: { test: ["CMD-SHELL", "python -c \"import urllib.request, sys; sys.exit(0 if urllib.request.urlopen('http://localhost:8000/health').status==200 else 1)\""], interval: 10s, retries: 10, start_period: 20s }

@@ -768,3 +768,23 @@ The project should prefer an honest incomplete status over a misleading complete
 - TODO 3.x Agent --daemon + payload encryption + 413/audit under load
 - TODO 4.x expand tools/evaluate.py 4 stages + re-run N=1000 seed42
 - TODO 5.x docs/STATUS 7, CHANGELOG, docker-compose DEMO_SCRIPT 30-sec before/after diff, 1-slide
+
+---
+
+## 2026-09-19 -- Phase 2 Docs & Demo (TODO 5.1-5.3) -- COMPLETE (synthetic lab, reproducible)
+
+### Added
+- tools/evaluate.py: 4-stage plain->shuffled->encrypted->flattened, N=1000 seed42 F1 0.971 P0.972 R0.97, perf avg 26ms p95 217ms, build/evaluate.json + build/perf.json
+- tests/test_evaluation_phase2.py (3): F1 band, 4 stages resilience, p95 <500ms
+- backend/app/providers/etw.py + ebpf.py: ETW Kernel-Process/Analytic + /proc+tracepoints/eBPF (lab, opt-in), factory I*Provider normalized schema 2.3, contracts 2.4 (5 tests same JOCKY->same MITRE)
+- agent/agent.py: --daemon persistent 24/7 LAB (DAEMON_INTERVAL, SIGTERM/SIGINT, heartbeat) vs one-shot, encrypted alerts xor+base64 via POST /api/evidence/encrypted (3.2), resource limits 413 + audit hash-chain under hardened IR (3.3, 5 tests)
+- docker-compose.yml: JOCKY_USE_ETW/JOCKY_USE_EBPF/JOCKY_ENCRYPT_KEY env, 30-sec polymorphic before/after demo target
+- DEMO_SCRIPT.md: 30-sec diff build/a.ll vs build/b.ll (3 distinct SHA same YARA cluster) + 4-stage resilience graph
+- docs/PHASE2_DESIGN.md approved and implemented; ARCHITECTURE 5.6 + DESIGN 7.1 include TRANSFORMS
+
+### Verified
+- pytest 181/181 (163+5+5+5+3), N=1000 seed42 reproducible, 3 hashes distinct same YARA cluster, ETW/eBPF fallback synthetic, daemon + encrypted 200, 413 limits, audit chain
+- Full forensic chain: JOCKY source -> Lexer/Parser/IR Validation->TRANSFORMS(lab)->Runtime->Evidence->Detection(YARA5+Sigma2+Behav)->Graph/Timeline/Risk->Dashboard->Report PDF (MinIO+Redis+PG)
+
+### Next
+- 5.3 final 1-slide Before IR vs After IR (build/a.ll vs build/b.ll diff) for judges
