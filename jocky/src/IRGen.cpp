@@ -39,6 +39,9 @@ static const std::unordered_map<std::string, std::string> OP_CAPS = {
   {"evidence.load","evidence.read"},
 };
 
+static std::vector<std::string> detShuffle(const std::vector<std::string>& in, uint32_t seed){ std::vector<std::string> o=in; std::mt19937 r(seed); std::shuffle(o.begin(), o.end(), r); return o; }
+static uint32_t xorKey(uint32_t seed){ std::mt19937 r(seed ^ 0x5A5A); return r()%255+1; }
+static void cfgParams(uint32_t seed, int &states, int &disp, std::vector<int> &order){ std::mt19937 r(seed ^ 0xA11CE); states=r()%4+3; disp=r()%8+2; std::vector<int> v; for(int i=0;i<states;i++) v.push_back(i); order=std::vector<int>(states); std::mt19937 r2(seed ^ 0xC0FFEE); std::shuffle(v.begin(), v.end(), r2); order=v; }
 static std::string sha12(const std::string& s){
   // simple header hash: use std::hash then hex, but for IRResult we use sha12 via hash
   // Real SHA256 is computed in Python fallback; here keep std::hash for backward compat + also expose hex hash
@@ -166,10 +169,13 @@ IRResult generateIRWithValidation(const std::string& jockySource, uint32_t seed,
 std::string generateIRText(const std::string& jockySource, uint32_t seed, bool poly){
   // First run validation to get ops/caps but ignore error for pure text generation? Keep validation separate.
   // For generateIRText we still produce IR even if ops empty; validation is done in generateIRWithValidation
+  // Phase 2 LAB deterministic transforms (see docs/PHASE2_DESIGN.md)
   std::mt19937 rng(seed ? seed : (uint32_t)std::chrono::steady_clock::now().time_since_epoch().count());
   uint32_t entry = 0x140001000 + (poly ? (rng()%0x5000) : 0);
-  std::vector<std::string> imports = {"kernel32.dll","ntdll.dll","advapi32.dll","user32.dll"};
-  if(poly) std::shuffle(imports.begin(), imports.end(), rng);
+  std::vector<std::string> baseImports = {"kernel32.dll","ntdll.dll","advapi32.dll","user32.dll"};
+  std::vector<std::string> imports = poly ? detShuffle(baseImports, seed) : baseImports;
+  uint32_t labXorKey = poly ? xorKey(seed) : 0;
+  int labStates=0, labDisp=0; std::vector<int> labOrder; if(poly) cfgParams(seed, labStates, labDisp, labOrder);
   std::ostringstream ir;
   ir << "; JOCKY IR - seed=" << seed << " poly=" << (poly?"1":"0") << "\n";
   ir << "; Source hash: " << sha12(jockySource) << "\n";
@@ -179,10 +185,15 @@ std::string generateIRText(const std::string& jockySource, uint32_t seed, bool p
   ir << "\n";
   ir << "; JOCKY_DEMO_MARKER\n";
   if(poly){
-    ir << "; -- polymorphic transforms applied --\n";
-    ir << "; cfg-flatten:(dispatch=" << (rng()%8+2) << ")\n";
-    ir << "; string-encrypt:xor(key=" << (rng()%255) << ")\n";
-    ir << "; import-obfuscate:shuffled\n";
+    ir << "; -- polymorphic transforms applied -- LAB / SIMULATED --\n";
+    ir << "; cfg-flatten:states=" << labStates << " dispatch=" << labDisp << " order=";
+    for(size_t i=0;i<labOrder.size();i++){ if(i) ir<<","; ir<<labOrder[i]; } ir<<"\n";
+    ir << "; string-encrypt:xor(key=" << labXorKey << ")\n";
+    ir << "; import-obfuscate:shuffled seed=" << seed << "\n";
+    ir << "; @LAB transform=import_shuffle seed=" << seed << " order="; for(auto &im: imports) ir<<im<<" "; ir<<"\n";
+    ir << "; @LAB transform=string_encrypt key=" << labXorKey << " reversible=seed\n";
+    ir << "; @LAB transform=cfg_flatten dispatcher=" << labDisp << " states=" << labStates << "\n";
+    ir << "; LAB reversible: seed=" << seed << " -> xor_key=" << labXorKey << "\n";
   }
   ir << "define i32 @main() {\n";
   ir << "entry:\n";
@@ -207,13 +218,25 @@ std::string generateIRText(const std::string& jockySource, uint32_t seed, bool p
   if(has("driver.risk")) emitCall("driver_risk");
   if(callId==0) emitCall("nop");
   if(poly){
-    int blocks = rng()%4+2;
-    for(int i=0;i<blocks;i++){
-      ir << "bb.poly." << i << ":\n";
-      ir << "  %" << callId++ << " = add i32 " << (rng()%100) << ", " << (rng()%100) << "\n";
-      ir << "  br label %bb.poly." << (i+1) << "\n";
+    ir << "  ; -- LAB CFG flatten dispatcher state=" << labDisp << " -- LAB / SIMULATED\n";
+    ir << "  %state = alloca i32\n";
+    ir << "  store i32 " << labDisp << ", i32* %state\n";
+    ir << "  br label %dispatch\n";
+    ir << "dispatch:\n";
+    ir << "  %cur = load i32, i32* %state\n";
+    ir << "  switch i32 %cur, label %bb.poly." << labOrder[0] << " [\n";
+    for(int s: labOrder) ir << "    i32 " << s << ", label %bb.poly." << s << "\n";
+    ir << "  ]\n";
+    for(int s: labOrder){
+      ir << "bb.poly." << s << ":\n";
+      std::mt19937 r2(seed ^ (0x1000 + s));
+      ir << "  %" << callId++ << " = add i32 " << (r2()%100) << ", " << (r2()%100) << " ; state=" << s << " LAB\n";
+      // next state
+      size_t idx=0; for(size_t k=0;k<labOrder.size();k++) if(labOrder[k]==s) idx=k;
+      int nxt = labOrder[(idx+1)%labOrder.size()];
+      ir << "  br label %bb.poly." << nxt << " ; next state\n";
     }
-    ir << "bb.poly." << blocks << ":\n";
+    ir << "bb.poly.exit:\n";
   }
   ir << "  ret i32 0\n";
   ir << "}\n";
