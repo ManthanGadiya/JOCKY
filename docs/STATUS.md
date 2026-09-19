@@ -746,3 +746,25 @@ If something partially works, mark it:
 and describe the limitation.
 
 The project should prefer an honest incomplete status over a misleading complete status.
+
+---
+
+## 2026-09-19 -- Phase 2 Hardening (Synthetic Lab: CFG Flatten + String Encrypt + Import Shuffle -- deterministic LAB) -- IN PROGRESS
+
+### Added
+- docs/PHASE2_DESIGN.md -- one-page design doc Goal/Non-Goals/Out-of-Scope per TODO 0.1 + transforms sit Source->Lexer->Parser->AST->IR->IR Validation->TRANSFORMS->Runtime per 0.2 (Approved, then code 0.3)
+- tools/jockyc.py -- Phase 2 LAB deterministic transforms: _det_shuffle/_xor_key/_cfg_cfg helpers, entry/imports deterministic per seed, LAB markers LAB / SIMULATED, @LAB transform lines, state-machine dispatcher bb.poly.* with switch + LAB reversible metadata (1.1-1.4)
+- jocky/src/IRGen.cpp -- mirrored deterministic helpers detShuffle/xorKey/cfgParams, entry/baseImports, LAB headers, switch dispatcher (C++ path, 1.1-1.4)
+- jocky/transform/*.cpp -- replaced stubs with documented LAB transforms (deterministic, seed-derived, JOCKY IR only)
+- tests/test_hardening_phase2.py (5) -- 3 hashes distinct + same_yara_cluster, deterministic same seed, LAB markers reversible, plain no LAB, fail-closed with poly (1.5)
+- docs/ARCHITECTURE.md 5.6 + docs/DESIGN.md 7.1 -- TRANSFORMS stage documented
+
+### Verified
+- pytest 168/168 (163+5) -- deterministic a==a2, a!=b, poly cluster holds, fail-closed 422/403 preserved
+- python tools/jockyc.py examples/test.jocky -o build/a.ll --seed 1 --polymorphic vs seed 2 -> distinct SHA but both LAB / SIMULATED + JOCKY_DEMO_MARKER
+
+### Next
+- TODO 2.x Platform Providers ETW/proc/eBPF behind I*Provider factory + 2.4 contract tests
+- TODO 3.x Agent --daemon + payload encryption + 413/audit under load
+- TODO 4.x expand tools/evaluate.py 4 stages + re-run N=1000 seed42
+- TODO 5.x docs/STATUS 7, CHANGELOG, docker-compose DEMO_SCRIPT 30-sec before/after diff, 1-slide

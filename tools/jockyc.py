@@ -62,10 +62,27 @@ def generate_ir(src: str, seed: int, poly: bool) -> str:
     ops, caps, errors = validate_and_collect(src)
     if errors:
         raise ValueError("; ".join(errors))
+    # Phase 2 LAB transforms - deterministic opt-in
+    def _det_shuffle(items, s):
+        r=random.Random(s)
+        o=list(items)
+        r.shuffle(o)
+        return o
+    def _xor_key(s):
+        r=random.Random(s ^ 0x5A5A)
+        return r.randint(1,255)
+    def _cfg_cfg(s):
+        r=random.Random(s ^ 0xA11CE)
+        states=r.randint(3,6)
+        disp=r.randint(2,9)
+        order=_det_shuffle(list(range(states)), s ^ 0xC0FFEE)
+        return states,disp,order
     rng = random.Random(seed if seed else random.randint(0, 2**31))
     entry = 0x140001000 + (rng.randint(0, 0x5000) if poly else 0)
-    imports = ["kernel32.dll","ntdll.dll","advapi32.dll","user32.dll"]
-    if poly: rng.shuffle(imports)
+    base_imports = ["kernel32.dll","ntdll.dll","advapi32.dll","user32.dll"]
+    imports = _det_shuffle(base_imports, seed) if poly else base_imports
+    _lab_xor_key = _xor_key(seed) if poly else 0
+    _lab_cfg_states, _lab_cfg_disp, _lab_cfg_order = _cfg_cfg(seed) if poly else (0,0,[])
     # Gap 2: collect language constructs for IR metadata
     jocky_imports=[]; funcs=[]; builtins_found=[]
     has_if = "if" in src and "if (" in src
@@ -112,10 +129,14 @@ def generate_ir(src: str, seed: int, poly: bool) -> str:
     out.append(f"; Imports: {' '.join(imports)}")
     out.append(f"; JOCKY_DEMO_MARKER")
     if poly:
-        out.append(f"; -- polymorphic transforms applied --")
-        out.append(f"; cfg-flatten:(dispatch={rng.randint(2,9)})")
-        out.append(f"; string-encrypt:xor(key={rng.randint(1,255)})")
-        out.append(f"; import-obfuscate:shuffled")
+        out.append(f"; -- polymorphic transforms applied -- LAB / SIMULATED --")
+        out.append(f"; cfg-flatten:states={_lab_cfg_states} dispatch={_lab_cfg_disp} order={_lab_cfg_order}")
+        out.append(f"; string-encrypt:xor(key={_lab_xor_key})")
+        out.append(f"; import-obfuscate:shuffled seed={seed}")
+        out.append(f"; @LAB transform=import_shuffle seed={seed} order={' '.join(imports)}")
+        out.append(f"; @LAB transform=string_encrypt key={_lab_xor_key} reversible=seed")
+        out.append(f"; @LAB transform=cfg_flatten dispatcher={_lab_cfg_disp} states={_lab_cfg_states}")
+        out.append(f"; LAB reversible: seed={seed} -> xor_key={_lab_xor_key} cfg_order={_lab_cfg_order}")
     out.append("define i32 @main() {")
     out.append("entry:")
     has = lambda kw: kw in src
@@ -153,13 +174,24 @@ def generate_ir(src: str, seed: int, poly: bool) -> str:
     if has_while: emit("while_loop")
     if cid==0: emit("nop")
     if poly:
-        blocks = rng.randint(2,5)
-        for i in range(blocks):
+        out.append(f"  ; -- LAB CFG flatten dispatcher state={_lab_cfg_disp} -- LAB / SIMULATED")
+        out.append(f"  %state = alloca i32")
+        out.append(f"  store i32 {_lab_cfg_disp}, i32* %state")
+        out.append(f"  br label %dispatch")
+        out.append(f"dispatch:")
+        out.append(f"  %cur = load i32, i32* %state")
+        out.append(f"  switch i32 %cur, label %bb.poly.{_lab_cfg_order[0]} [")
+        for _st in _lab_cfg_order:
+            out.append(f"    i32 {_st}, label %bb.poly.{_st}")
+        out.append(f"  ]")
+        for i in _lab_cfg_order:
             out.append(f"bb.poly.{i}:")
-            out.append(f"  %{cid} = add i32 {rng.randint(0,99)}, {rng.randint(0,99)}")
+            _r = random.Random(seed ^ (0x1000 + i))
+            out.append(f"  %{cid} = add i32 {_r.randint(0,99)}, {_r.randint(0,99)} ; state={i} LAB")
             cid+=1
-            out.append(f"  br label %bb.poly.{i+1}")
-        out.append(f"bb.poly.{blocks}:")
+            nxt = _lab_cfg_order[(_lab_cfg_order.index(i)+1) % len(_lab_cfg_order)]
+            out.append(f"  br label %bb.poly.{nxt} ; next state")
+        out.append(f"bb.poly.exit:")
     out.append("  ret i32 0")
     out.append("}")
     out.append("declare i32 @jocky_system_info()")

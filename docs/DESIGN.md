@@ -2157,3 +2157,6 @@ Report
 ```
 
 without relying on undocumented behavior.
+
+## 7.1 Phase 2 Compiler Hardening (LAB)
+Lab transforms run after IR Validation, before emission, only on JOCKY IR via --polymorphic. CfgFlatten: deterministic state-machine dispatcher (states 3-6, shuffled order seed ^ 0xC0FFEE). StringEncrypt: xor key per seed ^ 0x5A5A, header LAB marker reversible via seed. ImportObfuscate: deterministic shuffle per seed. All deterministic (same source+seed=same IR), labeled LAB / SIMULATED, fail-closed preserved (unknown op 422 even with poly). See docs/PHASE2_DESIGN.md and jocky/transform/*.cpp + tools/jockyc.py.

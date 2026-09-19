@@ -1298,3 +1298,6 @@ docs/
 `ARCHITECTURE.md` describes **what the system is and how its components interact**.
 
 It does not claim that every component described here is already implemented. Current implementation progress is tracked separately in `STATUS.md`.
+
+## 5.6 Phase 2 TRANSFORMS (LAB --polymorphic)
+Phase 2 adds deterministic TRANSFORMS after IR Validation and before Runtime (see docs/PHASE2_DESIGN.md). Three LAB-only textual IR transforms: CFG Flatten (state-machine dispatcher bb.poly.* deterministic per seed), String Encryption (xor key = rng(seed ^ 0x5A5A) reversible), Import Shuffling (deterministic shuffle per seed). All opt-in via --polymorphic, labeled LAB / SIMULATED, auditable via header markers and LAB reversible metadata. Preserves JOCKY_DEMO_MARKER and same_yara_cluster (hash != detection).

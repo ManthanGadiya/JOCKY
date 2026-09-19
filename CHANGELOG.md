@@ -105,6 +105,19 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/) and [Sem
 ### Changed
 - `agent/Dockerfile` rebuild marker comment to force `docker compose build agent backend` cache bust
 
+## 2026-09-19 -- Phase 2 Hardening: Deterministic LAB Transforms (CFG Flatten + String Encrypt + Import Shuffle)
+
+### Added
+- docs/PHASE2_DESIGN.md -- Goal/Non-Goals/Out-of-Scope + TRANSFORMS location
+- tools/jockyc.py + jocky/src/IRGen.cpp -- deterministic LAB transforms (seed-based, opt-in --polymorphic, LAB / SIMULATED, reversible)
+- jocky/transform/CfgFlatten.cpp/StringEncrypt.cpp/ImportObfuscate.cpp -- documented LAB implementations
+- tests/test_hardening_phase2.py -- 5 tests (3 hashes distinct + same_yara_cluster, deterministic, LAB markers, fail-closed)
+- docs/ARCHITECTURE.md 5.6 + docs/DESIGN.md 7.1 -- pipeline now includes TRANSFORMS
+
+### Verified
+- pytest 168/168; build/a.ll vs build/b.ll deterministic distinct SHA, same YARA cluster
+
+
 ## 2026-08-28 — Correlation Enrichment — Temporal + PID + Platform (104 tests)
 
 ### Added
