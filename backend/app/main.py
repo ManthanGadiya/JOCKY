@@ -1182,6 +1182,30 @@ def sigma_status():
             raise HTTPException(status_code=500, detail=str(e))
     raise HTTPException(status_code=500, detail="Sigma tuner not available")
 
+@app.post("/api/evidence/encrypted")
+def post_evidence_encrypted(req: dict):
+    """3.2 Encrypted alert packets via API Gateway (lab, JWT/mTLS already there + payload encryption)."""
+    token = req.get("payload_encrypted") or req.get("encrypted_payload")
+    if not token:
+        raise HTTPException(status_code=400, detail="Missing payload_encrypted (lab)")
+    try:
+        payload = _lab_decrypt_payload(token)
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Decrypt failed: {e}")
+    # Reuse normal evidence flow via synthetic Evidence model
+    ev = Evidence(agent_id=req.get("agent_id","WIN-001"), type=payload.get("type", req.get("type","unknown")), payload=payload)
+    # delegate to existing post_evidence logic by calling it directly (avoid duplication)
+    return post_evidence(ev)
+
+@app.get("/api/evidence/verify-encrypted")
+def verify_encrypted(token: str = "", key: str = ""):
+    try:
+        k = key or JOCKY_ENCRYPT_KEY
+        payload = _lab_decrypt_payload(token, k)
+        return {"verified": True, "payload": payload, "lab": True}
+    except Exception as e:
+        return {"verified": False, "error": str(e)}
+
 @app.get("/api/audit")
 def audit_log(limit: int = 50, action: Optional[str] = None, actor: Optional[str] = None):
     if _audit:
@@ -1488,6 +1512,22 @@ except ImportError:
         _sigma_tuner = None
 
 # Resource limits per SECURITY_MODEL §28 + DESIGN §53
+JOCKY_ENCRYPT_KEY = os.getenv("JOCKY_ENCRYPT_KEY", "jocky-lab-key")
+
+def _lab_encrypt_payload(payload: dict, key: str = JOCKY_ENCRYPT_KEY) -> str:
+    import base64, json
+    raw = json.dumps(payload, sort_keys=True).encode()
+    kb = key.encode()
+    enc = bytes(b ^ kb[i % len(kb)] for i, b in enumerate(raw))
+    return base64.b64encode(enc).decode()
+
+def _lab_decrypt_payload(token: str, key: str = JOCKY_ENCRYPT_KEY) -> dict:
+    import base64, json
+    kb = key.encode()
+    enc = base64.b64decode(token.encode())
+    raw = bytes(b ^ kb[i % len(kb)] for i, b in enumerate(enc))
+    return json.loads(raw.decode())
+
 MAX_IR_SIZE = int(os.getenv("MAX_IR_SIZE", "102400"))  # 100KB
 MAX_EVIDENCE_SIZE = int(os.getenv("MAX_EVIDENCE_SIZE", str(5*1024*1024)))  # 5MB
 MAX_SOURCE_SIZE = int(os.getenv("MAX_SOURCE_SIZE", "50000"))  # 50KB JOCKY source

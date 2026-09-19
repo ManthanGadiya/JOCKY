@@ -25,6 +25,24 @@ CASE_ID = int(os.getenv("CASE_ID", "1"))
 FIXTURE_DIR = pathlib.Path(os.getenv("FIXTURE_DIR", "/app/testdata"))
 JOCKY_SOURCE = os.getenv("JOCKY_SOURCE", 'system.info();\nprocess.list();\nfile.hash("/evidence/sample.exe");\nnetwork.connections();')
 POLL_SECONDS = int(os.getenv("AGENT_POLL_SECONDS", "0"))  # 0 = run once then idle
+DAEMON_INTERVAL = int(os.getenv("JOCKY_DAEMON_INTERVAL", str(POLL_SECONDS if POLL_SECONDS>0 else 30)))
+ENCRYPT_ALERTS = os.getenv("JOCKY_ENCRYPT_ALERTS", "").lower() in ("1","true","yes","on")
+ENCRYPT_KEY = os.getenv("JOCKY_ENCRYPT_KEY", "jocky-lab-key")
+
+def encrypt_payload_lab(payload: dict, key: str = ENCRYPT_KEY) -> str:
+    """Lab payload encryption (xor+base64) -- not for prod mTLS, lab-only per 3.2."""
+    import base64, json
+    raw = json.dumps(payload, sort_keys=True).encode()
+    kb = key.encode()
+    enc = bytes(b ^ kb[i % len(kb)] for i, b in enumerate(raw))
+    return base64.b64encode(enc).decode()
+
+def decrypt_payload_lab(token: str, key: str = ENCRYPT_KEY) -> dict:
+    import base64, json
+    kb = key.encode()
+    enc = base64.b64decode(token.encode())
+    raw = bytes(b ^ kb[i % len(kb)] for i, b in enumerate(enc))
+    return json.loads(raw.decode())
 
 def log(msg: str):
     ts = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
@@ -55,6 +73,16 @@ def http_post_json(path: str, payload: dict, timeout=10):
         return e.code, body
     except Exception as e:
         return None, str(e)
+
+def _maybe_encrypt_body(body: dict) -> dict:
+    if ENCRYPT_ALERTS:
+        # encrypt payload field only, keep envelope meta clear per lab design 3.2
+        payload = body.get("payload", {})
+        body = dict(body)
+        body["payload_encrypted"] = encrypt_payload_lab(payload)
+        body["payload"] = {"_encrypted": True, "note": "LAB encrypted -- see /api/evidence/verify-encrypted"}
+        body["encrypted"] = True
+    return body
 
 def post_fixture_via_nginx(fixture_path: pathlib.Path, case_id: int):
     """POST a testdata fixture through nginx → POST /api/evidence"""
@@ -103,7 +131,12 @@ def post_fixture_via_nginx(fixture_path: pathlib.Path, case_id: int):
     # Remove None timestamp so backend uses default
     if body.get("timestamp") is None:
         body.pop("timestamp", None)
-    status, resp = http_post_json("/api/evidence", body)
+    # 3.2 encrypted alert packets via API Gateway (lab)
+    if ENCRYPT_ALERTS:
+        enc_body = _maybe_encrypt_body(body)
+        status, resp = http_post_json("/api/evidence/encrypted", enc_body)
+    else:
+        status, resp = http_post_json("/api/evidence", body)
     if status == 200:
         j = json.loads(resp)
         log(f"POST /api/evidence via nginx {fixture_path.name} → {j.get('id')} risk={j.get('risk')} sha={str(j.get('sha256',''))[:12]}")
@@ -186,10 +219,45 @@ def agent_scan_once():
     else:
         log(f"Fail-closed check via nginx unexpected: {bad_source!r} → status={bs} (expected 422)")
 
+def _run_cycle():
+    agent_scan_once()
+
+def daemon_loop(interval: int = DAEMON_INTERVAL):
+    import signal
+    stop = {"flag": False}
+    def _handler(signum, frame):
+        stop["flag"] = True
+        log(f"daemon received signal {signum}, shutting down")
+    try:
+        signal.signal(signal.SIGTERM, _handler)
+        signal.signal(signal.SIGINT, _handler)
+    except Exception:
+        pass
+    log(f"daemon mode -- interval {interval}s, encrypt={ENCRYPT_ALERTS} -- persistent 24/7 LAB")
+    while not stop["flag"]:
+        _run_cycle()
+        log(f"daemon heartbeat -- sleeping {interval}s (lab)")
+        for _ in range(interval):
+            if stop["flag"]:
+                break
+            time.sleep(1)
+    log("daemon stopped")
+
 def main():
     mode = sys.argv[1] if len(sys.argv) > 1 else "--scan"
+    daemon = "--daemon" in sys.argv or os.getenv("JOCKY_DAEMON", "").lower() in ("1","true","yes")
     # support --once flag for one-shot, otherwise loop if POLL_SECONDS >0
-    once = "--once" in sys.argv or POLL_SECONDS == 0
+    once = "--once" in sys.argv or (POLL_SECONDS == 0 and not daemon)
+    if daemon:
+        log(f"JOCKY Agent DAEMON mode -- BACKEND_URL={BACKEND_URL} interval={DAEMON_INTERVAL} encrypt={ENCRYPT_ALERTS} -- lab persistent 24/7")
+        for attempt in range(12):
+            s,_ = http_get("/health")
+            if s==200:
+                break
+            log(f"Waiting for nginx... attempt {attempt+1}/12")
+            time.sleep(2)
+        daemon_loop(DAEMON_INTERVAL)
+        return
     log(f"JOCKY Agent starting — BACKEND_URL={BACKEND_URL} FIXTURE_DIR={FIXTURE_DIR} mode={mode}")
     # wait for nginx/backend to be ready (docker startup order)
     for attempt in range(12):
