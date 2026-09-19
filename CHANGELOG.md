@@ -105,6 +105,17 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/) and [Sem
 ### Changed
 - `agent/Dockerfile` rebuild marker comment to force `docker compose build agent backend` cache bust
 
+
+## 2026-09-19 -- Phase 2 Evaluation + Docs & Demo (4.1-5.3)
+
+### Added
+- tools/evaluate.py (4 stages plain->shuffled->encrypted->flattened, N=1000 seed42, F1 0.971, resilience 0.75 vs YARA 0.65, p95 217ms) + build/evaluate.json/perf.json
+- tests/test_evaluation_phase2.py (3) + poster graphs regenerated (poster_obfuscation_graph.png/pdf)
+- docs/STATUS 5.1, ARCHITECTURE 5.6, DESIGN 7.1, docker-compose env (JOCKY_USE_ETW/EBPF/ENCRYPT), DEMO_SCRIPT 30-sec polymorphic diff, 1-slide Before/After IR
+
+### Verified
+- 181/181 pytest; full chain hardened lab reproducible
+
 ## 2026-09-19 -- Phase 2 Hardening: Deterministic LAB Transforms (CFG Flatten + String Encrypt + Import Shuffle)
 
 ### Added

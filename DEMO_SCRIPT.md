@@ -56,3 +56,30 @@ open http://localhost:3000
 
 ## PPT line
 Defensive forensics: synthetic evidence + controlled fixtures + hash≠detection (3 IRs → 1 YARA cluster) — no kernel exploitation, no EDR bypass, all Docker reproducible.
+
+## 4. Phase 2 -- 30-sec Polymorphic Before/After IR Diff (LAB, 4-stage)
+```bash
+# Before (plain) vs After (hardened) -- same source, same seed, different IR -- LAB / SIMULATED
+python tools/jockyc.py examples/test.jocky -o build/before.ll --seed 42
+python tools/jockyc.py examples/test.jocky -o build/after.ll --seed 42 --polymorphic
+echo "=== BEFORE (plain) ===" && head -n 25 build/before.ll
+echo "=== AFTER (hardened LAB) ===" && head -n 35 build/after.ll
+diff -u build/before.ll build/after.ll | head -n 60
+REM Should show:  Imports shuffled, cfg-flatten:states=... dispatch=..., string-encrypt:xor(key=...), @LAB transform lines, LAB reversible, and bb.poly.* switch dispatcher
+certutil -hashfile build/before.ll SHA256 & certutil -hashfile build/after.ll SHA256
+REM 2 hashes differ (hash != detection)
+python tools/jockyc.py examples/test.jocky -o build/a.ll --seed 1 --polymorphic && python tools/jockyc.py examples/test.jocky -o build/b.ll --seed 2 --polymorphic && python tools/jockyc.py examples/test.jocky -o build/c.ll --seed 3 --polymorphic
+certutil -hashfile build/a.ll SHA256 & certutil -hashfile build/b.ll SHA256 & certutil -hashfile build/c.ll SHA256
+REM 3 hashes distinct
+curl -X POST http://localhost:8000/api/yara/polymorphic-demo -H "Content-Type: application/json" -d "{\"source\":\"system.info();\\nprocess.list();\",\"seeds\":[1,2,3],\"polymorphic\":true}"
+REM {"distinct_hashes":true,"same_yara_cluster":true} -- proves 3 SHA -> 1 YARA cluster
+```
+
+## 5. Phase 2 Evaluation (N=1000 seed 42)
+```bash
+python tools/evaluate.py --n 1000 --seed 42
+cat build/evaluate.json | python -m json.tool | head -n 40
+REM F1 0.971 P 0.972 R 0.97 TP 485 FP14, resilience plain/shuffled/encrypted/flattened: JOCKY 0.75 vs YARA 0.65 mean
+cat build/perf.json
+REM avg 26ms p95 217ms -- host TestClient, LAB
+```
