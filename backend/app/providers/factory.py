@@ -18,10 +18,21 @@ def detect_platform() -> Platform:
         return "windows"
     return "linux"
 
-def get_providers(platform: str = None):
+def get_providers(platform: str = None, use_etw: bool = None):
     """Return tuple (system, process, file, network, driver) providers for given platform."""
+    import os
     p = (platform or detect_platform()).lower()
+    # ETW opt-in: explicit param > env JOCKY_USE_ETW > auto fallback to Windows synthetic (lab)
+    if use_etw is None:
+        use_etw = os.getenv("JOCKY_USE_ETW", "").lower() in ("1","true","yes","on")
     if p in ("win","windows"):
+        if use_etw:
+            try:
+                from .etw import WindowsETWSystemProvider, WindowsETWProcessProvider, WindowsETWFileProvider, WindowsETWNetworkProvider
+                from .windows import WindowsDriverProvider
+                return WindowsETWSystemProvider(), WindowsETWProcessProvider(), WindowsETWFileProvider(), WindowsETWNetworkProvider(), WindowsDriverProvider()
+            except Exception:
+                pass
         from .windows import WindowsSystemProvider, WindowsProcessProvider, WindowsFileProvider, WindowsNetworkProvider, WindowsDriverProvider
         return WindowsSystemProvider(), WindowsProcessProvider(), WindowsFileProvider(), WindowsNetworkProvider(), WindowsDriverProvider()
     else:
