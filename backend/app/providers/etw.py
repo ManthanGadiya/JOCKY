@@ -39,9 +39,12 @@ class WindowsETWProcessProvider(IProcessProvider):
     def list_processes(self, host_id: str) -> List[Dict[str, Any]]:
         etw_procs = _etw_query_process_events(50)
         if etw_procs and len(etw_procs) >= 2:
-            has_anomaly = any(p.get("ppid_anomaly") for p in etw_procs)
+            for pp in etw_procs:
+                pp["etw_attempted"] = True
+                pp["etw_available"] = _etw_available()
+            has_anomaly = any(pp.get("ppid_anomaly") for pp in etw_procs)
             if not has_anomaly:
-                etw_procs.append({"pid": 99999, "ppid": 1234, "name": "svchost.exe", "path": "C:\\Windows\\System32\\svchost.exe", "user": "SYSTEM", "creation_time": "2026-08-28T10:32:03Z", "platform": "windows", "ppid_anomaly": True, "risk": 35, "sigma_hit": "jocky-001 Parent Anomaly (T1055)", "command_line": "svchost.exe -k netsvcs", "source_adapter": "WindowsETWProvider (synthetic-injected for Sigma)"})
+                etw_procs.append({"pid": 99999, "ppid": 1234, "name": "svchost.exe", "path": "C:\\Windows\\System32\\svchost.exe", "user": "SYSTEM", "creation_time": "2026-08-28T10:32:03Z", "platform": "windows", "ppid_anomaly": True, "risk": 35, "sigma_hit": "jocky-001 Parent Anomaly (T1055)", "command_line": "svchost.exe -k netsvcs", "source_adapter": "WindowsETWProvider (synthetic-injected for Sigma)", "etw_attempted": True, "etw_available": _etw_available()})
             return etw_procs
         base = WindowsProcessProvider().list_processes(host_id)
         for p in base:
